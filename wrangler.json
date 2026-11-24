@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "logicq-v2",
+  "name": "logicq",
   "compatibility_date": "2026-11-24",
   "assets": {
     "directory": "./client/dist",
