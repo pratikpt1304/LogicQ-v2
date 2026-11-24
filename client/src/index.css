@@ -1,0 +1,926 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* Light Theme Tokens (Matching Indigo-Mint Brand Family, WCAG AA >= 4.5:1) */
+  :root,
+  html.light,
+  html[data-theme='light'] {
+    color-scheme: light;
+    --navbar-height: 4rem;
+    --bg-main: #F4F6FB;
+    --bg-page: #F4F6FB;
+    --bg-card: #FFFFFF;
+    --bg-panel: #FFFFFF;
+    --bg-surface: #EEF1F8;
+    --bg-surface-hover: #E2E7F4;
+    --border-main: #CBD2E6;
+    --border-line: #CBD2E6;
+    --border-subtle: #CBD2E6;
+    --text-main: #0C0F1F;
+    --text-secondary: #434C6E;
+    --text-muted: #434C6E;
+    --color-accent: #3643D0;
+    --color-success: #096B48;
+    --color-error: #B81B35;
+    --color-warning: #8C5000;
+    --header-bg: #FFFFFF;
+    --glass-bg: #FFFFFF;
+    --glass-border: #CBD2E6;
+    --shadow-card: 0 4px 16px -2px rgba(12, 15, 31, 0.08);
+    --scrollbar-track: #EEF1F8;
+    --scrollbar-thumb: #9AA1C4;
+    --card: #FFFFFF;
+    --card-foreground: #0C0F1F;
+    --background: #F4F6FB;
+    --foreground: #0C0F1F;
+    --muted: #EEF1F8;
+    --muted-foreground: #434C6E;
+    --border: #CBD2E6;
+    --accent: #3643D0;
+  }
+
+  /* Dark Theme Tokens (Exact LogicQ Brand Specification, WCAG AA >= 4.5:1) */
+  html.dark,
+  html[data-theme='dark'] {
+    color-scheme: dark;
+    --navbar-height: 4rem;
+    --bg-main: #0C0F1F;
+    --bg-page: #0C0F1F;
+    --bg-card: #141932;
+    --bg-panel: #141932;
+    --bg-surface: #181E3C;
+    --bg-surface-hover: #1E2548;
+    --border-main: #252C4F;
+    --border-line: #252C4F;
+    --border-subtle: #252C4F;
+    --text-main: #E8EAF6;
+    --text-secondary: #9AA1C4;
+    --text-muted: #9AA1C4;
+    --color-accent: #8B9BFF;
+    --color-success: #46D9A0;
+    --color-error: #FF7A8A;
+    --color-warning: #FBBF24;
+    --header-bg: #0C0F1F;
+    --glass-bg: #141932;
+    --glass-border: #252C4F;
+    --shadow-card: 0 4px 20px -2px rgba(0, 0, 0, 0.45);
+    --scrollbar-track: #0C0F1F;
+    --scrollbar-thumb: #252C4F;
+    --card: #141932;
+    --card-foreground: #E8EAF6;
+    --background: #0C0F1F;
+    --foreground: #E8EAF6;
+    --muted: #181E3C;
+    --muted-foreground: #9AA1C4;
+    --border: #252C4F;
+    --accent: #8B9BFF;
+  }
+
+  html {
+    background-color: var(--bg-main);
+    color: var(--text-main);
+    font-size: 16px;
+    scroll-padding-top: var(--navbar-height, 4rem);
+  }
+
+  [id] {
+    scroll-margin-top: calc(var(--navbar-height, 4rem) + 1rem);
+  }
+
+  body {
+    background-color: var(--bg-main);
+    color: var(--text-main);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "SF Pro", "Inter", system-ui, sans-serif;
+    font-size: 1rem;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    background-image:
+      radial-gradient(at 15% 15%, rgba(139, 155, 255, 0.06) 0px, transparent 45%),
+      radial-gradient(at 85% 85%, rgba(70, 217, 160, 0.05) 0px, transparent 45%);
+    background-attachment: fixed;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    font-family: 'Bricolage Grotesque', 'Inter', sans-serif;
+    color: var(--text-main);
+    letter-spacing: -0.015em;
+  }
+
+  code,
+  pre,
+  kbd,
+  samp {
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  /* Clean, invisible scrollbars while retaining full scrollability across all browsers */
+  * {
+    scrollbar-width: none !important;
+    -ms-overflow-style: none !important;
+  }
+  ::-webkit-scrollbar {
+    width: 0px !important;
+    height: 0px !important;
+    display: none !important;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent !important;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: transparent !important;
+  }
+  ::-webkit-scrollbar-button {
+    display: none !important;
+    width: 0px !important;
+    height: 0px !important;
+  }
+
+  /* Accessible 2px Accent Focus Rings with Offset */
+  a:focus-visible,
+  button:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible,
+  [role='button']:focus-visible,
+  [tabindex]:focus-visible {
+    outline: 2px solid var(--color-accent) !important;
+    outline-offset: 2px !important;
+  }
+
+  /* High-contrast form controls & placeholders in both themes (excluding dark terminal consoles) */
+  input:not([type='checkbox']):not([type='radio']):not(.terminal-stdin):not([data-terminal]),
+  select:not([data-terminal]),
+  textarea:not(.terminal-stdin):not([data-terminal]) {
+    background-color: var(--bg-main) !important;
+    color: var(--text-main) !important;
+    border-color: var(--border-line) !important;
+  }
+
+  /* Scoped dark terminal stdin console */
+  .terminal-stdin,
+  textarea.terminal-stdin,
+  [data-terminal] textarea,
+  textarea[data-terminal='true'] {
+    background-color: #020408 !important;
+    color: #f8fafc !important;
+    border-color: #334155 !important;
+    caret-color: #38bdf8 !important;
+  }
+
+  .terminal-stdin::placeholder,
+  textarea.terminal-stdin::placeholder,
+  [data-terminal] textarea::placeholder,
+  textarea[data-terminal='true']::placeholder {
+    color: #64748b !important;
+    opacity: 1 !important;
+  }
+
+  select option {
+    background-color: var(--bg-panel);
+    color: var(--text-main);
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--text-muted) !important;
+    opacity: 1 !important;
+  }
+
+  /* Keep disabled controls >= 4.5:1 contrast without fading out text */
+  button:disabled,
+  input:disabled,
+  select:disabled,
+  textarea:disabled,
+  .disabled\:opacity-50:disabled,
+  .disabled\:opacity-40:disabled {
+    opacity: 1 !important;
+    cursor: not-allowed !important;
+  }
+}
+
+/* Crisp Panel Card (No backdrop-filter blur or fractional transforms on text containers) */
+.glass-card {
+  background-color: var(--bg-panel) !important;
+  border: 1px solid var(--border-line) !important;
+  box-shadow: var(--shadow-card);
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.glass-card-hover {
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.glass-card-hover:hover {
+  background-color: var(--bg-surface) !important;
+  border-color: var(--color-accent) !important;
+}
+
+.glow-cyan {
+  box-shadow: 0 0 24px -6px rgba(139, 155, 255, 0.25);
+}
+
+.glow-emerald {
+  box-shadow: 0 0 24px -6px rgba(70, 217, 160, 0.25);
+}
+
+/* Enforce minimum 14px (0.875rem) font size across all small text utilities */
+.text-xs,
+[class*='text-[9px]'],
+[class*='text-[10px]'],
+[class*='text-[11px]'],
+[class*='text-[12px]'],
+[class*='text-[13px]'] {
+  font-size: 0.875rem !important;
+  line-height: 1.35rem !important;
+}
+
+/* Centralised Brand Colour Token Mappings (WCAG AA >= 4.5:1 guaranteed in BOTH Dark & Light themes) */
+.bg-dark-950,
+.dark\:bg-dark-950,
+.bg-\[\#0C0F1F\] {
+  background-color: var(--bg-main) !important;
+}
+
+.bg-dark-900,
+.dark\:bg-dark-900,
+.bg-dark-900\/80,
+.bg-dark-900\/95,
+.bg-white,
+.bg-\[\#141932\] {
+  background-color: var(--bg-panel) !important;
+}
+
+.bg-dark-850,
+.dark\:bg-dark-850,
+.bg-slate-50,
+.bg-slate-100,
+.bg-\[\#181E3C\],
+.bg-\[\#252C4F\] {
+  background-color: var(--bg-surface) !important;
+}
+
+.bg-dark-800,
+.dark\:bg-dark-800,
+.bg-slate-200,
+.bg-\[\#1E2548\] {
+  background-color: var(--bg-surface-hover) !important;
+}
+
+.border-dark-700,
+.border-slate-200,
+.border-slate-300,
+.border-slate-700,
+.border-slate-800,
+.border-\[\#252C4F\],
+[class*='border-white/'] {
+  border-color: var(--border-line) !important;
+}
+
+.text-white {
+  color: #F8FAFC !important;
+}
+
+.dark\:text-white,
+.text-slate-900,
+.text-slate-800,
+.text-slate-100,
+.dark\:text-slate-100,
+.text-slate-200,
+.dark\:text-slate-200,
+.text-\[\#E8EAF6\] {
+  color: var(--text-main) !important;
+}
+
+/* Explicit dark mode text brightness & contrast guarantee */
+html.dark .dark\:text-white,
+html.dark [class*='dark:text-white'],
+html[data-theme='dark'] .dark\:text-white,
+html[data-theme='dark'] [class*='dark:text-white'] {
+  color: #F8FAFC !important;
+}
+
+html.dark .dark\:text-slate-100,
+html.dark [class*='dark:text-slate-100'],
+html[data-theme='dark'] .dark\:text-slate-100,
+html[data-theme='dark'] [class*='dark:text-slate-100'] {
+  color: #F1F5F9 !important;
+}
+
+html.dark .dark\:text-slate-200,
+html.dark [class*='dark:text-slate-200'],
+html[data-theme='dark'] .dark\:text-slate-200,
+html[data-theme='dark'] [class*='dark:text-slate-200'] {
+  color: #E2E8F0 !important;
+}
+
+html.dark .dark\:text-slate-300,
+html.dark [class*='dark:text-slate-300'],
+html[data-theme='dark'] .dark\:text-slate-300,
+html[data-theme='dark'] [class*='dark:text-slate-300'] {
+  color: #CBD5E1 !important;
+}
+
+html.dark .dark\:text-slate-400,
+html.dark [class*='dark:text-slate-400'],
+html[data-theme='dark'] .dark\:text-slate-400,
+html[data-theme='dark'] [class*='dark:text-slate-400'] {
+  color: #94A3B8 !important;
+}
+
+/* Explicit protection: ONLY when an element is explicitly styled with dark:text-slate-900 */
+html.dark .dark\:text-slate-900,
+html.dark [class*='dark:text-slate-900'],
+html[data-theme='dark'] .dark\:text-slate-900,
+html[data-theme='dark'] [class*='dark:text-slate-900'] {
+  color: #0f172a !important;
+}
+
+.text-slate-300,
+.dark\:text-slate-300,
+.text-slate-400,
+.dark\:text-slate-400,
+.text-slate-500,
+.dark\:text-slate-500,
+.text-slate-600,
+.dark\:text-slate-600,
+.text-slate-700,
+.text-\[\#9AA1C4\] {
+  color: var(--text-muted) !important;
+}
+
+.text-cyan-200,
+.text-cyan-300,
+.text-cyan-400,
+.text-cyan-500,
+.text-cyan-600,
+.text-cyan-700,
+.text-cyan-800,
+.dark\:text-cyan-200,
+.dark\:text-cyan-300,
+.dark\:text-cyan-400,
+.text-purple-300,
+.text-purple-400,
+.text-purple-600,
+.text-purple-700,
+.dark\:text-purple-300,
+.dark\:text-purple-400,
+.text-\[\#8B9BFF\] {
+  color: var(--color-accent) !important;
+}
+
+.text-emerald-200,
+.text-emerald-300,
+.text-emerald-400,
+.text-emerald-500,
+.text-emerald-600,
+.text-emerald-700,
+.dark\:text-emerald-300,
+.dark\:text-emerald-400,
+.text-\[\#46D9A0\] {
+  color: var(--color-success) !important;
+}
+
+.text-rose-200,
+.text-rose-300,
+.text-rose-400,
+.text-rose-500,
+.text-rose-600,
+.text-rose-700,
+.dark\:text-rose-300,
+.dark\:text-rose-400,
+.text-pink-400,
+.text-pink-700,
+.dark\:text-pink-400,
+.text-\[\#FF7A8A\] {
+  color: var(--color-error) !important;
+}
+
+.text-amber-300,
+.text-amber-400,
+.text-amber-600,
+.text-amber-700,
+.dark\:text-amber-400,
+.text-orange-300,
+.text-orange-400,
+.text-orange-600,
+.text-orange-700,
+.dark\:text-orange-400 {
+  color: var(--color-warning) !important;
+}
+
+/* Primary Gradient & Solid Accent CTA Buttons: always crisp #0C0F1F text on #8B9BFF -> #46D9A0 (7.05:1 - 10.42:1 contrast) */
+.from-cyan-400.to-emerald-400:not(.bg-clip-text),
+.from-cyan-500.to-emerald-500:not(.bg-clip-text),
+.from-\[\#8B9BFF\].to-\[\#46D9A0\]:not(.bg-clip-text) {
+  background-color: #46D9A0 !important;
+  background-image: linear-gradient(to right, #8B9BFF, #46D9A0) !important;
+  color: #0C0F1F !important;
+}
+
+.from-cyan-400.to-emerald-400:not(.bg-clip-text) span,
+.from-cyan-400.to-emerald-400:not(.bg-clip-text) svg,
+.from-cyan-500.to-emerald-500:not(.bg-clip-text) span,
+.from-cyan-500.to-emerald-500:not(.bg-clip-text) svg,
+.from-\[\#8B9BFF\].to-\[\#46D9A0\]:not(.bg-clip-text) span,
+.from-\[\#8B9BFF\].to-\[\#46D9A0\]:not(.bg-clip-text) svg,
+.bg-\[\#8B9BFF\],
+.bg-\[\#8B9BFF\] span,
+.bg-\[\#8B9BFF\] svg,
+.bg-\[\#46D9A0\],
+.bg-\[\#46D9A0\] span,
+.bg-\[\#46D9A0\] svg,
+.text-dark-950,
+.text-\[\#0C0F1F\] {
+  color: #0C0F1F !important;
+}
+
+.bg-clip-text {
+  color: var(--color-accent) !important;
+  background: none !important;
+}
+
+/* Monaco Editor Line Numbers: guarantee >= 4.5:1 contrast in both Dark and Light themes */
+.monaco-editor .line-numbers {
+  color: var(--text-muted) !important;
+  font-family: 'JetBrains Mono', monospace !important;
+  font-size: 14px !important;
+}
+
+.monaco-editor .active-line-number {
+  color: var(--color-accent) !important;
+  font-weight: 700 !important;
+}
+
+/* Ensure prose markdown descriptions have crisp >=14px text and WCAG AA contrast */
+.prose {
+  color: var(--text-main) !important;
+  font-size: 0.9375rem !important;
+  line-height: 1.65 !important;
+}
+
+.prose h1,
+.prose h2,
+.prose h3,
+.prose h4,
+.prose strong {
+  color: var(--text-main) !important;
+  font-family: 'Bricolage Grotesque', 'Inter', sans-serif;
+}
+
+.prose code {
+  color: var(--color-accent) !important;
+  background-color: var(--bg-surface) !important;
+  border: 1px solid var(--border-line);
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.375rem;
+  font-size: 0.875rem !important;
+}
+
+.prose pre {
+  background-color: var(--bg-main) !important;
+  border: 1px solid var(--border-line) !important;
+  color: var(--text-main) !important;
+  font-size: 0.875rem !important;
+}
+
+/* Respect prefers-reduced-motion and prevent animation/transform text blur */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ==========================================================================
+   LogicQ Practice Report A4 Print Rules (Clean Light Theme & Page Budgeting)
+   ========================================================================== */
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 12mm 10mm 15mm 10mm;
+  }
+
+  body {
+    background: #FFFFFF !important;
+    color: #0C0F1F !important;
+    font-size: 10pt;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  nav,
+  footer,
+  .print\\:hidden,
+  button:not(.print-show) {
+    display: none !important;
+  }
+
+  #printable-practice-report {
+    background: #FFFFFF !important;
+    color: #0C0F1F !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  #printable-practice-report * {
+    color: #0C0F1F !important;
+    background-color: transparent !important;
+    border-color: #D1D5DB !important;
+  }
+
+  #printable-practice-report .text-emerald-400,
+  #printable-practice-report [class*="text-emerald"],
+  #printable-practice-report [class*="text-[#46D9A0]"] {
+    color: #065F46 !important;
+  }
+
+  #printable-practice-report .text-amber-400,
+  #printable-practice-report .text-amber-300,
+  #printable-practice-report [class*="text-amber"] {
+    color: #92400E !important;
+  }
+
+  #printable-practice-report .text-rose-400,
+  #printable-practice-report [class*="text-rose"],
+  #printable-practice-report [class*="text-[#FF7A8A]"] {
+    color: #991B1B !important;
+  }
+
+  #printable-practice-report [class*="text-[#8B9BFF]"] {
+    color: #3730A3 !important;
+  }
+
+  .print-page-break {
+    page-break-before: always !important;
+    break-before: page !important;
+  }
+
+  .print-page-break-after {
+    page-break-after: always !important;
+    break-after: page !important;
+  }
+
+  table {
+    page-break-inside: auto;
+  }
+
+  tr {
+    page-break-inside: avoid !important;
+    page-break-after: auto;
+  }
+
+  thead {
+    display: table-header-group;
+  }
+
+  tfoot {
+    display: table-footer-group;
+  }
+
+  .print-avoid-break {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  .print-page-footer {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    font-size: 8pt;
+    text-align: center;
+    border-top: 1px solid #D1D5DB;
+    padding-top: 4px;
+    background: #FFFFFF !important;
+  }
+}
+
+/* Light Mode Contrast Protections: Ensures text-white and light gray never wash out on light surfaces */
+html.light .text-white:not([class*='bg-indigo-']):not([class*='bg-purple-']):not([class*='bg-cyan-']):not([class*='bg-emerald-']):not([class*='bg-rose-']):not([class*='bg-blue-']):not([class*='bg-gradient-']):not([class*='bg-gray-']):not([class*='bg-black']):not([class*='bg-slate-']):not([class*='bg-zinc-']),
+html[data-theme='light'] .text-white:not([class*='bg-indigo-']):not([class*='bg-purple-']):not([class*='bg-cyan-']):not([class*='bg-emerald-']):not([class*='bg-rose-']):not([class*='bg-blue-']):not([class*='bg-gradient-']):not([class*='bg-gray-']):not([class*='bg-black']):not([class*='bg-slate-']):not([class*='bg-zinc-']),
+html.light .glass-card .text-white:not([class*='bg-indigo-']):not([class*='bg-purple-']):not([class*='bg-cyan-']):not([class*='bg-emerald-']):not([class*='bg-rose-']):not([class*='bg-blue-']):not([class*='bg-gradient-']),
+html[data-theme='light'] .glass-card .text-white:not([class*='bg-indigo-']):not([class*='bg-purple-']):not([class*='bg-cyan-']):not([class*='bg-emerald-']):not([class*='bg-rose-']):not([class*='bg-blue-']):not([class*='bg-gradient-']) {
+  color: var(--text-main) !important;
+}
+
+/* Explicit protection: text-white inside dark containers or buttons ALWAYS stays white */
+.galaxy-btn,
+.galaxy-btn *,
+.galaxy-btn svg,
+.galaxy-text,
+.galaxy-text *,
+.galaxy-text svg,
+html.light [class*='bg-gray-9'] .text-white,
+html.light [class*='bg-black'] .text-white,
+html.light [class*='bg-indigo-9'] .text-white,
+html.light [class*='bg-slate-9'] .text-white,
+html.light [class*='bg-gradient-'] .text-white,
+html[data-theme='light'] [class*='bg-gray-9'] .text-white,
+html[data-theme='light'] [class*='bg-black'] .text-white,
+html[data-theme='light'] [class*='bg-indigo-9'] .text-white,
+html[data-theme='light'] [class*='bg-slate-9'] .text-white,
+html[data-theme='light'] [class*='bg-gradient-'] .text-white {
+  color: #FFFFFF !important;
+}
+
+.galaxy-btn svg,
+.galaxy-text svg {
+  stroke: #FFFFFF !important;
+}
+
+/* Terminal Scope Protection: Prevent light theme from inverting dark terminal text in compiler outputs */
+.terminal-window {
+  background-color: #0c1017 !important;
+  border-color: #1e293b !important;
+}
+
+#dashboard-online-compiler-section,
+#dashboard-online-compiler-section .terminal-body,
+#dashboard-online-compiler-section pre {
+  --text-main: #f1f5f9 !important;
+  --text-muted: #94a3b8 !important;
+}
+
+html.light #dashboard-online-compiler-section,
+html[data-theme='light'] #dashboard-online-compiler-section {
+  background-color: #0c1017 !important;
+  border-color: #1e293b !important;
+  color: #f1f5f9 !important;
+}
+
+.terminal-body pre,
+.compiler-terminal-output,
+#dashboard-online-compiler-section pre {
+  background-color: #020408 !important;
+  color: #4ade80 !important;
+}
+
+/* Submission Code Viewer Modal: Explicit Contrast Protection */
+.code-viewer-container,
+.code-viewer-container pre,
+.code-viewer-container code {
+  color: #f8fafc !important;
+  background-color: #0c101a !important;
+}
+
+.code-viewer-container .select-none {
+  color: #64748b !important;
+  background-color: transparent !important;
+}
+
+html.light table th,
+html[data-theme='light'] table th {
+  color: var(--text-muted) !important;
+}
+
+html.light table td,
+html[data-theme='light'] table td {
+  color: var(--text-main) !important;
+}
+
+html.light table thead,
+html[data-theme='light'] table thead {
+  background-color: var(--bg-surface) !important;
+  border-color: var(--border-line) !important;
+}
+
+
+/* =====================================================================
+   APPLE HIG FLUID MOTION, PHYSICS & TACTILE CONTROLS (iOS / macOS feel)
+   ===================================================================== */
+
+:root {
+  --apple-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --apple-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --apple-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+html {
+  scroll-behavior: smooth !important;
+  -webkit-tap-highlight-color: transparent !important;
+}
+
+/* Global invisible scrollbars across all viewports & containers */
+* {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+
+::-webkit-scrollbar {
+  width: 0px !important;
+  height: 0px !important;
+  display: none !important;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent !important;
+}
+
+::-webkit-scrollbar-thumb {
+  background: transparent !important;
+}
+
+::-webkit-scrollbar-button {
+  display: none !important;
+  width: 0px !important;
+  height: 0px !important;
+}
+
+/* Explicit utility for no scrollbars */
+.no-scrollbar {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none !important;
+  width: 0px !important;
+  height: 0px !important;
+}
+
+/* Hide Monaco Editor internal scrollbars completely */
+.monaco-editor .scrollbar,
+.monaco-editor .decorationsOverviewRuler,
+.monaco-editor .visible.scrollbar {
+  display: none !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  width: 0px !important;
+  height: 0px !important;
+}
+
+/* Apple tactile button physics */
+.apple-btn,
+button.apple-interactive {
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.15s ease, opacity 0.15s ease;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.apple-btn:active:not(:disabled),
+button.apple-interactive:active:not(:disabled) {
+  transform: scale(0.96) !important;
+}
+
+/* Apple segmented pill switcher container */
+.apple-segmented-group {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px;
+  border-radius: 14px;
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-line);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+.apple-segmented-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 10px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.apple-segmented-item:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+/* Apple frosted glass sheet */
+.apple-sheet-blur {
+  backdrop-filter: blur(28px) saturate(190%) !important;
+  -webkit-backdrop-filter: blur(28px) saturate(190%) !important;
+}
+
+/* Smooth Drawer transitions */
+.apple-drawer-transition {
+  transition: height 0.35s cubic-bezier(0.16, 1, 0.3, 1), max-height 0.35s cubic-bezier(0.16, 1, 0.3, 1), transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Anti-Screenshot & Screen Capture Print Shield (Active strictly inside Question Solving Workspaces) */
+@media print {
+  body.proctored-workspace-active:not(.is-admin) #root,
+  body.proctored-workspace-active:not(.is-admin) main,
+  body.proctored-workspace-active:not(.is-admin) section {
+    display: none !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+    height: 0 !important;
+    width: 0 !important;
+    overflow: hidden !important;
+  }
+}
+
+/* Boot Progress Bar */
+.boot-progress-bar {
+  width: 140px;
+  height: 3.5px;
+  background: var(--border-line, rgba(148, 163, 184, 0.25));
+  border-radius: 9999px;
+  overflow: hidden;
+  margin: 6px auto 18px auto;
+  position: relative;
+}
+.boot-progress-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 45%;
+  background: linear-gradient(90deg, #8B9BFF, #46D9A0);
+  border-radius: 9999px;
+  animation: bootProgress 1.3s ease-in-out infinite;
+}
+@keyframes bootProgress {
+  0% { left: -50%; width: 30%; }
+  50% { left: 30%; width: 55%; }
+  100% { left: 110%; width: 30%; }
+}
+
+/* 4-Square Glowing Rotating Loader */
+.loader {
+  --sizeVar: 64px;
+  position: relative;
+  width: var(--sizeVar);
+  height: var(--sizeVar);
+  animation: loaderRotate 2000ms ease-in-out infinite;
+  margin-bottom: 24px;
+}
+.loader::before {
+  content: "";
+  position: absolute;
+  width: 200%;
+  height: 200%;
+  top: -50%;
+  left: -50%;
+  background: radial-gradient(
+    circle,
+    rgba(255, 255, 255, 0.2) 0%,
+    rgba(255, 255, 255, 0) 70%
+  );
+  pointer-events: none;
+}
+.loader-square {
+  position: absolute;
+  width: 45%;
+  height: 45%;
+  background-color: #f25022;
+  border-radius: 4px;
+  transform-origin: center;
+  animation: squareAnim 4000ms cubic-bezier(1, 0, 0, 1) infinite,
+    squareBlink 1000ms ease-in-out infinite;
+  box-shadow: 0 0 8px #f25022aa, 0 0 32px #f2502277;
+}
+.loader-square:nth-of-type(2) {
+  background-color: #7fba02;
+  box-shadow: 0 0 8px #7fba02aa, 0 0 32px #7fba0277;
+  animation-delay: -1000ms, -75ms;
+}
+.loader-square:nth-of-type(3) {
+  background-color: #ffb902;
+  box-shadow: 0 0 8px #ffb902aa, 0 0 32px #ffb90277;
+  animation-delay: -2000ms, -150ms;
+}
+.loader-square:nth-of-type(4) {
+  background-color: #01a4ef;
+  box-shadow: 0 0 8px #01a4efaa, 0 0 32px #01a4ef77;
+  animation-delay: -3000ms, -225ms;
+}
+
+@keyframes squareAnim {
+  0% { transform: translate(0, 0); }
+  25% { transform: translate(120%, 0); }
+  50% { transform: translate(120%, 120%); }
+  75% { transform: translate(0, 120%); }
+  100% { transform: translate(0, 0); }
+}
+@keyframes squareBlink {
+  0% { filter: brightness(110%); }
+  20% { filter: brightness(110%); }
+  50% { filter: brightness(80%); }
+  80% { filter: brightness(110%); }
+  100% { filter: brightness(110%); }
+}
+@keyframes loaderRotate {
+  0% { transform: scale(1); }
+  50% { transform: scale(0.7); }
+  100% { transform: scale(1); }
+}
+

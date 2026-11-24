@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: logicq-api
+    runtime: docker
+    dockerfilePath: server/Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: CLIENT_URL
+        value: https://logicq-clanguage.web.app
+      - key: DATABASE_URL
+        value: file:./prisma/prod.db
+      - key: JUDGE_TYPE
+        value: local_gcc
+      - key: JWT_ACCESS_SECRET
+        value: logicq_prod_access_secret_persistent_key_2026_fixed
+      - key: JWT_REFRESH_SECRET
+        value: logicq_prod_refresh_secret_persistent_key_2026_fixed

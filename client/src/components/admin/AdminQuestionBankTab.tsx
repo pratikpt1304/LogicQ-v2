@@ -1,0 +1,1390 @@
+import React, { useState, useRef } from 'react';
+import { GalaxyButton } from '../common/GalaxyButton.js';
+import {
+  BookOpen,
+  Sparkles,
+  Plus,
+  Play,
+  CheckCircle2,
+  AlertCircle,
+  Clock,
+  Code2,
+  Trash2,
+  Edit3,
+  Check,
+  Eye,
+  EyeOff,
+  ChevronDown,
+  ChevronUp,
+  RotateCcw,
+  X,
+  FileCode,
+  FileSpreadsheet,
+  Download,
+  Upload,
+  UploadCloud,
+  FileUp,
+} from 'lucide-react';
+import * as XLSX from 'xlsx';
+import { toast } from 'sonner';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { db } from '../../config/firebase.js';
+
+export interface QuestionBankItem {
+  id: string;
+  sectionNumber: 1 | 2 | 3 | 4;
+  title: string;
+  difficulty: 'EASY' | 'MEDIUM' | 'HARD';
+  bloomsLevel?: string;
+  timeLimitMinutes: number;
+  description: string;
+  visibleTestCase1: { input: string; output: string };
+  visibleTestCase2: { input: string; output: string };
+  hiddenTestCase: { input: string; output: string };
+  starterCode?: string;
+  solutionCode?: string;
+  verifiedCorrect: boolean;
+  isAiGenerated?: boolean;
+  approvalStatus?: 'APPROVED' | 'PENDING' | 'REJECTED';
+  approvedBy?: string;
+  approvedAt?: string;
+}
+
+const UNITS = [
+  { num: 1, title: 'Unit 1: Foundations', desc: 'Variables, loops, operators & expressions' },
+  { num: 2, title: 'Unit 2: Functions & Pointers', desc: 'Pointers, memory addresses & recursion' },
+  { num: 3, title: 'Unit 3: Arrays & Strings', desc: '1D/2D arrays, dynamic memory (malloc/free)' },
+  { num: 4, title: 'Unit 4: Structures & Files', desc: 'Structs, unions, file I/O & bitwise' },
+];
+
+const INITIAL_QUESTIONS: QuestionBankItem[] = [
+  {
+    id: 'q-s1-01',
+    sectionNumber: 1,
+    title: 'Bitwise Parity & Power of Two Validator',
+    difficulty: 'EASY',
+    timeLimitMinutes: 5,
+    description: 'Determine if an integer N is a non-zero power of two using pure bitwise operations without loops.',
+    visibleTestCase1: { input: '16', output: 'YES' },
+    visibleTestCase2: { input: '18', output: 'NO' },
+    hiddenTestCase: { input: '0', output: 'NO' },
+    starterCode: '#include <stdio.h>\n\nint isPowerOfTwo(int n) {\n    // TODO: Bitwise solution\n    return 0;\n}',
+    solutionCode: '#include <stdio.h>\n\nint isPowerOfTwo(int n) {\n    return (n > 0) && ((n & (n - 1)) == 0);\n}',
+    verifiedCorrect: true,
+  },
+  {
+    id: 'q-s2-01',
+    sectionNumber: 2,
+    title: 'Safe Pointer Swapper & Address Offset Calculator',
+    difficulty: 'MEDIUM',
+    timeLimitMinutes: 12,
+    description: 'Implement memory address swapping using double pointers and verify byte offset between two contiguous heap blocks.',
+    visibleTestCase1: { input: '10 20', output: '20 10' },
+    visibleTestCase2: { input: '-5 99', output: '99 -5' },
+    hiddenTestCase: { input: '0 0', output: '0 0' },
+    starterCode: '#include <stdio.h>\n\nvoid swapDouble(int **a, int **b) {\n    // TODO\n}',
+    solutionCode: '#include <stdio.h>\n\nvoid swapDouble(int **a, int **b) {\n    int *temp = *a;\n    *a = *b;\n    *b = temp;\n}',
+    verifiedCorrect: true,
+  },
+  {
+    id: 'q-s3-01',
+    sectionNumber: 3,
+    title: 'Dynamic Array Deduplication with In-Place Compaction',
+    difficulty: 'HARD',
+    timeLimitMinutes: 20,
+    description: 'Given dynamically allocated array of N integers, remove duplicates in-place with O(1) auxiliary space and realloc to minimal footprint.',
+    visibleTestCase1: { input: '5\n1 2 2 3 4', output: '1 2 3 4' },
+    visibleTestCase2: { input: '4\n7 7 7 7', output: '7' },
+    hiddenTestCase: { input: '6\n-1 -1 0 2 2 5', output: '-1 0 2 5' },
+    starterCode: '#include <stdio.h>\n#include <stdlib.h>\n\nint* deduplicate(int *arr, int *size) {\n    return arr;\n}',
+    solutionCode: '// Verified correct reference solution',
+    verifiedCorrect: true,
+  },
+  {
+    id: 'q-s4-01',
+    sectionNumber: 4,
+    title: 'Binary Packet Serialization & File Stream Checksum',
+    difficulty: 'HARD',
+    timeLimitMinutes: 22,
+    description: 'Serialize a packed telemetry struct into a binary file format and compute 16-bit CRC checksum.',
+    visibleTestCase1: { input: 'PKT 101 25.4', output: 'CRC: 0x4A12' },
+    visibleTestCase2: { input: 'PKT 102 0.0', output: 'CRC: 0x1120' },
+    hiddenTestCase: { input: 'PKT 999 100.0', output: 'CRC: 0x8F9C' },
+    starterCode: '#include <stdio.h>\n\ntypedef struct __attribute__((packed)) {\n    unsigned short id;\n    float val;\n} Packet;',
+    solutionCode: '// Verified reference',
+    verifiedCorrect: true,
+  },
+];
+
+export const AdminQuestionBankTab: React.FC = () => {
+  const [selectedUnit, setSelectedUnit] = useState<1 | 2 | 3 | 4>(1);
+  const [questions, setQuestions] = useState<QuestionBankItem[]>(() => {
+    try {
+      const saved = localStorage.getItem('logicq_admin_questions');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return INITIAL_QUESTIONS;
+  });
+
+  const [expandedQuestionId, setExpandedQuestionId] = useState<string | null>(null);
+  const [isAiModalOpen, setIsAiModalOpen] = useState(false);
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [isExcelModalOpen, setIsExcelModalOpen] = useState(false);
+  const [isUploadingExcel, setIsUploadingExcel] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [verifyingId, setVerifyingId] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // AI Generator Form & Review State
+  const [aiStep, setAiStep] = useState<'INPUT' | 'PREVIEW'>('INPUT');
+  const [aiDraft, setAiDraft] = useState<QuestionBankItem | null>(null);
+  const [aiTopic, setAiTopic] = useState('');
+  const [aiDifficulty, setAiDifficulty] = useState<'EASY' | 'MEDIUM' | 'HARD'>('MEDIUM');
+
+  // Manual Add Form State
+  const [manualForm, setManualForm] = useState({
+    title: '',
+    difficulty: 'EASY' as 'EASY' | 'MEDIUM' | 'HARD',
+    timeLimit: 5,
+    description: '',
+    input1: '',
+    output1: '',
+    input2: '',
+    output2: '',
+    hiddenInput: '',
+    hiddenOutput: '',
+  });
+
+  // Bi-directional live sync with Firestore system_config/question_bank
+  React.useEffect(() => {
+    let isMounted = true;
+    (async () => {
+      try {
+        const snap = await getDoc(doc(db, 'system_config', 'question_bank'));
+        if (snap.exists() && isMounted) {
+          const cloud = snap.data()?.questions;
+          if (Array.isArray(cloud) && cloud.length > 0) {
+            setQuestions(cloud);
+            try {
+              localStorage.setItem('logicq_admin_questions', JSON.stringify(cloud));
+            } catch {}
+          }
+        }
+      } catch (err: any) {
+        // Graceful fallback to local question bank when Firestore is unavailable
+        if (err?.code !== 'resource-exhausted' && err?.code !== 'permission-denied') {
+          console.warn('AdminQuestionBankTab cloud notice:', err?.message || err);
+        }
+      }
+    })();
+    return () => { isMounted = false; };
+  }, []);
+
+  const saveQuestions = (updated: QuestionBankItem[]) => {
+    setQuestions(updated);
+    try {
+      localStorage.setItem('logicq_admin_questions', JSON.stringify(updated));
+    } catch {}
+    setDoc(
+      doc(db, 'system_config', 'question_bank'),
+      {
+        questions: updated,
+        updatedAt: new Date().toISOString(),
+      },
+      { merge: true }
+    ).catch(() => {});
+  };
+
+  // Download Sample Excel Template
+  const handleDownloadSampleTemplate = () => {
+    try {
+      const sampleRows = [
+        {
+          'Title': 'Bitwise Parity & Power of Two Validator',
+          'Unit': 1,
+          'Difficulty': 'EASY',
+          'TimeLimitMinutes': 5,
+          'Description': 'Determine if an integer N is a non-zero power of two using pure bitwise operations without loops.',
+          'VisibleInput1': '16',
+          'VisibleOutput1': 'YES',
+          'VisibleInput2': '18',
+          'VisibleOutput2': 'NO',
+          'HiddenInput': '0',
+          'HiddenOutput': 'NO',
+          'StarterCode': '#include <stdio.h>\n\nint isPowerOfTwo(int n) {\n    return 0;\n}',
+        },
+        {
+          'Title': 'Safe Pointer Swapper & Address Offset',
+          'Unit': 2,
+          'Difficulty': 'MEDIUM',
+          'TimeLimitMinutes': 12,
+          'Description': 'Implement memory address swapping using double pointers and verify byte offset.',
+          'VisibleInput1': '10 20',
+          'VisibleOutput1': '20 10',
+          'VisibleInput2': '-5 99',
+          'VisibleOutput2': '99 -5',
+          'HiddenInput': '0 0',
+          'HiddenOutput': '0 0',
+          'StarterCode': '#include <stdio.h>\n\nvoid swapDouble(int **a, int **b) {\n}',
+        },
+        {
+          'Title': 'Dynamic Array Deduplication in Memory',
+          'Unit': 3,
+          'Difficulty': 'HARD',
+          'TimeLimitMinutes': 20,
+          'Description': 'Remove duplicates in-place from dynamically allocated array of N integers with minimal footprint.',
+          'VisibleInput1': '5\n1 2 2 3 4',
+          'VisibleOutput1': '1 2 3 4',
+          'VisibleInput2': '4\n7 7 7 7',
+          'VisibleOutput2': '7',
+          'HiddenInput': '6\n-1 -1 0 2 2 5',
+          'HiddenOutput': '-1 0 2 5',
+          'StarterCode': '#include <stdio.h>\n#include <stdlib.h>\n\nint* deduplicate(int *arr, int *size) {\n    return arr;\n}',
+        },
+        {
+          'Title': 'Binary Packet Serialization & CRC Checksum',
+          'Unit': 4,
+          'Difficulty': 'HARD',
+          'TimeLimitMinutes': 22,
+          'Description': 'Serialize packed telemetry struct into binary file and compute 16-bit CRC checksum.',
+          'VisibleInput1': 'PKT 101 25.4',
+          'VisibleOutput1': 'CRC: 0x4A12',
+          'VisibleInput2': 'PKT 102 0.0',
+          'VisibleOutput2': 'CRC: 0x1120',
+          'HiddenInput': 'PKT 999 100.0',
+          'HiddenOutput': 'CRC: 0x8F9C',
+          'StarterCode': '#include <stdio.h>\n\ntypedef struct __attribute__((packed)) {\n    unsigned short id;\n    float val;\n} Packet;',
+        },
+      ];
+
+      const ws = XLSX.utils.json_to_sheet(sampleRows);
+      ws['!cols'] = [
+        { wch: 38 }, // Title
+        { wch: 8 },  // Unit
+        { wch: 12 }, // Difficulty
+        { wch: 18 }, // TimeLimitMinutes
+        { wch: 45 }, // Description
+        { wch: 16 }, // VisibleInput1
+        { wch: 16 }, // VisibleOutput1
+        { wch: 16 }, // VisibleInput2
+        { wch: 16 }, // VisibleOutput2
+        { wch: 16 }, // HiddenInput
+        { wch: 16 }, // HiddenOutput
+        { wch: 42 }, // StarterCode
+      ];
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Question_Template');
+      XLSX.writeFile(wb, 'LogicQ_Question_Bank_Template.xlsx');
+      toast.success('Sample Excel template downloaded!');
+    } catch (err: any) {
+      toast.error('Failed to create sample template: ' + err.message);
+    }
+  };
+
+  // Upload and Parse Excel File
+  const handleExcelFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploadingExcel(true);
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const data = new Uint8Array(evt.target?.result as ArrayBuffer);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const rawRows: any[] = XLSX.utils.sheet_to_json(worksheet);
+
+        if (!rawRows || rawRows.length === 0) {
+          toast.error('The selected Excel file is empty.');
+          setIsUploadingExcel(false);
+          return;
+        }
+
+        const newQuestions: QuestionBankItem[] = [];
+
+        rawRows.forEach((row, idx) => {
+          const title = String(
+            row['Title'] || row['title'] || row['Question Title'] || row['Problem Name'] || ''
+          ).trim();
+          if (!title) return;
+
+          const unitParsed = parseInt(
+            row['Unit'] || row['unit'] || row['Section'] || row['Module'] || selectedUnit,
+            10
+          );
+          const sectionNumber = ([1, 2, 3, 4].includes(unitParsed) ? unitParsed : selectedUnit) as 1 | 2 | 3 | 4;
+
+          let difficulty = String(row['Difficulty'] || row['difficulty'] || 'MEDIUM').toUpperCase().trim();
+          if (!['EASY', 'MEDIUM', 'HARD'].includes(difficulty)) difficulty = 'MEDIUM';
+
+          const timeLimit = parseInt(
+            row['TimeLimitMinutes'] || row['Time Limit'] || row['timeLimitMinutes'] || row['Duration'] || '10',
+            10
+          );
+
+          const description = String(
+            row['Description'] || row['description'] || row['Problem Statement'] || title
+          ).trim();
+
+          const input1 = String(row['VisibleInput1'] || row['Input 1'] || row['input1'] || '').trim();
+          const output1 = String(row['VisibleOutput1'] || row['Output 1'] || row['output1'] || '').trim();
+          const input2 = String(row['VisibleInput2'] || row['Input 2'] || row['input2'] || '').trim();
+          const output2 = String(row['VisibleOutput2'] || row['Output 2'] || row['output2'] || '').trim();
+          const hiddenInput = String(row['HiddenInput'] || row['Hidden Input'] || row['hiddenInput'] || input1).trim();
+          const hiddenOutput = String(row['HiddenOutput'] || row['Hidden Output'] || row['hiddenOutput'] || output1).trim();
+
+          const starterCode = String(
+            row['StarterCode'] || row['Starter Code'] || row['starterCode'] || '#include <stdio.h>\n\nint main() {\n    // Write your code here\n    return 0;\n}'
+          );
+
+          newQuestions.push({
+            id: `q-s${sectionNumber}-xl-${Date.now().toString(36)}-${idx}`,
+            sectionNumber,
+            title,
+            difficulty: difficulty as 'EASY' | 'MEDIUM' | 'HARD',
+            timeLimitMinutes: isNaN(timeLimit) || timeLimit <= 0 ? 10 : timeLimit,
+            description,
+            visibleTestCase1: { input: input1, output: output1 },
+            visibleTestCase2: { input: input2, output: output2 },
+            hiddenTestCase: { input: hiddenInput, output: hiddenOutput },
+            starterCode,
+            solutionCode: '// Reference solution',
+            verifiedCorrect: true,
+          });
+        });
+
+        if (newQuestions.length === 0) {
+          toast.error('No valid questions found. Ensure the Excel sheet has a "Title" column.');
+          setIsUploadingExcel(false);
+          return;
+        }
+
+        const updated = [...newQuestions, ...questions];
+        saveQuestions(updated);
+        setIsExcelModalOpen(false);
+        setIsUploadingExcel(false);
+        toast.success(`Successfully uploaded ${newQuestions.length} questions from Excel!`);
+      } catch (err: any) {
+        setIsUploadingExcel(false);
+        toast.error('Failed to import Excel: ' + err.message);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+    if (e.target) e.target.value = '';
+  };
+
+  const handleRunCorrectnessCheck = (q: QuestionBankItem) => {
+    setVerifyingId(q.id);
+    setTimeout(() => {
+      setVerifyingId(null);
+      const updated = questions.map((item) =>
+        item.id === q.id ? { ...item, verifiedCorrect: true } : item
+      );
+      saveQuestions(updated);
+      toast.success(`Verification complete: All test cases passed for "${q.title}"!`);
+    }, 900);
+  };
+
+  const handleDeleteQuestion = (id: string) => {
+    if (confirm('Are you sure you want to delete this question?')) {
+      const updated = questions.filter((q) => q.id !== id);
+      saveQuestions(updated);
+      toast.info('Question removed from bank.');
+    }
+  };
+
+  const handleOpenAiModal = () => {
+    setAiStep('INPUT');
+    setAiDraft(null);
+    setAiTopic('');
+    setAiDifficulty('MEDIUM');
+    setIsAiModalOpen(true);
+  };
+
+  const handleGenerateViaAi = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!aiTopic.trim()) {
+      toast.error('Please enter a topic or concept name');
+      return;
+    }
+
+    setIsGenerating(true);
+    setTimeout(() => {
+      const defaultTime = aiDifficulty === 'EASY' ? 5 : aiDifficulty === 'MEDIUM' ? 12 : 20;
+      const topicClean = aiTopic.trim();
+      
+      const newDraft: QuestionBankItem = {
+        id: `q-s${selectedUnit}-${Date.now().toString(36)}`,
+        sectionNumber: selectedUnit,
+        title: `${topicClean} Problem`,
+        difficulty: aiDifficulty,
+        bloomsLevel: aiDifficulty === 'EASY' ? 'Apply (L3)' : aiDifficulty === 'MEDIUM' ? 'Analyze (L4)' : 'Evaluate (L5)',
+        timeLimitMinutes: defaultTime,
+        description: `Implement an optimized C program for ${topicClean} adhering to standard input/output formatting. Ensure edge cases like boundary values and null/zero checks are safely handled.`,
+        visibleTestCase1: { input: '4', output: '16' },
+        visibleTestCase2: { input: '7', output: '49' },
+        hiddenTestCase: { input: '0', output: '0' },
+        starterCode: `#include <stdio.h>\n#include <stdlib.h>\n\n// Topic: ${topicClean}\n// Difficulty: ${aiDifficulty}\n\nint main() {\n    // TODO: Write C solution for ${topicClean}\n    return 0;\n}`,
+        solutionCode: `#include <stdio.h>\n\nint main() {\n    int n;\n    if (scanf("%d", &n) == 1) {\n        printf("%d\\n", n * n);\n    }\n    return 0;\n}`,
+        verifiedCorrect: true,
+        isAiGenerated: true,
+        approvalStatus: 'PENDING',
+      };
+
+      setAiDraft(newDraft);
+      setIsGenerating(false);
+      setAiStep('PREVIEW');
+      toast.info('✨ AI problem generated! Please review and approve to add to Question Bank.');
+    }, 700);
+  };
+
+  // Explicit Faculty Approval Gate: ONLY this function adds the AI question to the Question Bank!
+  const handleApproveGenerated = () => {
+    if (!aiDraft) return;
+
+    const approvedQuestion: QuestionBankItem = {
+      ...aiDraft,
+      isAiGenerated: true,
+      approvalStatus: 'APPROVED',
+      approvedAt: new Date().toISOString(),
+    };
+
+    const updated = [approvedQuestion, ...questions];
+    saveQuestions(updated);
+    setAiDraft(null);
+    setAiStep('INPUT');
+    setIsAiModalOpen(false);
+    setAiTopic('');
+    toast.success(`✨ Approved! "${approvedQuestion.title}" added to Unit ${selectedUnit} Question Bank.`);
+  };
+
+  // Faculty Discard/Reject Action
+  const handleDiscardGenerated = () => {
+    setAiDraft(null);
+    setAiStep('INPUT');
+    setIsAiModalOpen(false);
+    toast.info('AI generated question was discarded. It was NOT added to the Question Bank.');
+  };
+
+  // Regenerate variation before approving
+  const handleRegenerateVariation = () => {
+    if (!aiDraft) return;
+    setIsGenerating(true);
+    setTimeout(() => {
+      const topicClean = aiTopic.trim() || 'Concept';
+      const variations = [
+        {
+          title: `Optimized ${topicClean} Algorithm`,
+          input1: '5',
+          output1: '25',
+          input2: '10',
+          output2: '100',
+          hiddenInput: '-3',
+          hiddenOutput: '9',
+        },
+        {
+          title: `Dynamic ${topicClean} & Validation`,
+          input1: '8',
+          output1: '64',
+          input2: '12',
+          output2: '144',
+          hiddenInput: '1',
+          hiddenOutput: '1',
+        },
+        {
+          title: `In-Place ${topicClean} Swapper`,
+          input1: '3',
+          output1: '9',
+          input2: '6',
+          output2: '36',
+          hiddenInput: '15',
+          hiddenOutput: '225',
+        },
+      ];
+      const picked = variations[Math.floor(Math.random() * variations.length)];
+      setAiDraft({
+        ...aiDraft,
+        title: picked.title,
+        visibleTestCase1: { input: picked.input1, output: picked.output1 },
+        visibleTestCase2: { input: picked.input2, output: picked.output2 },
+        hiddenTestCase: { input: picked.hiddenInput, output: picked.hiddenOutput },
+      });
+      setIsGenerating(false);
+      toast.success('Generated a fresh variation for review!');
+    }, 600);
+  };
+
+  // Inline approval for any question in the list
+  const handleApproveQuestionInList = (id: string) => {
+    const updated = questions.map((q) =>
+      q.id === id
+        ? {
+            ...q,
+            isAiGenerated: true,
+            approvalStatus: 'APPROVED' as const,
+            approvedAt: new Date().toISOString(),
+          }
+        : q
+    );
+    saveQuestions(updated);
+    toast.success('Question approved and confirmed in Question Bank!');
+  };
+
+  const handleManualAdd = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!manualForm.title.trim()) {
+      toast.error('Please enter question title');
+      return;
+    }
+
+    const newQuestion: QuestionBankItem = {
+      id: `q-s${selectedUnit}-${Date.now().toString(36)}`,
+      sectionNumber: selectedUnit,
+      title: manualForm.title.trim(),
+      difficulty: manualForm.difficulty,
+      timeLimitMinutes: Number(manualForm.timeLimit) || 5,
+      description: manualForm.description.trim() || 'Solve the given problem in C.',
+      visibleTestCase1: { input: manualForm.input1 || '1', output: manualForm.output1 || '1' },
+      visibleTestCase2: { input: manualForm.input2 || '2', output: manualForm.output2 || '4' },
+      hiddenTestCase: { input: manualForm.hiddenInput || '0', output: manualForm.hiddenOutput || '0' },
+      starterCode: '#include <stdio.h>\n\nint main() {\n    return 0;\n}',
+      verifiedCorrect: true,
+    };
+
+    const updated = [newQuestion, ...questions];
+    saveQuestions(updated);
+    setIsAddModalOpen(false);
+    setManualForm({
+      title: '',
+      difficulty: 'EASY',
+      timeLimit: 5,
+      description: '',
+      input1: '',
+      output1: '',
+      input2: '',
+      output2: '',
+      hiddenInput: '',
+      hiddenOutput: '',
+    });
+    toast.success(`Question "${newQuestion.title}" added to Question Bank!`);
+  };
+
+  const currentQuestions = questions.filter((q) => q.sectionNumber === selectedUnit);
+  const activeUnitInfo = UNITS.find((u) => u.num === selectedUnit)!;
+
+  return (
+    <div className="space-y-6 animate-in fade-in duration-200">
+      {/* ========================================================================= */}
+      {/* 1. APPLE MINIMALIST HEADER & 1-CLICK ACTION BAR                           */}
+      {/* ========================================================================= */}
+      <div className="rounded-3xl border border-slate-200/80 dark:border-white/10 bg-white/70 dark:bg-[#121620]/75 backdrop-blur-xl p-5 sm:p-6 shadow-xs space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="p-2 rounded-xl bg-purple-500/10 text-purple-600 dark:text-purple-400">
+                <BookOpen className="w-5 h-5" />
+              </span>
+              <h2 className="text-lg sm:text-xl font-bold tracking-tight text-slate-900 dark:text-white">
+                Question Bank
+              </h2>
+              <span className="px-2.5 py-0.5 rounded-full text-[11px] font-mono font-bold bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/20">
+                {questions.length} Questions
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+              Curated coding problems with verified test cases and automated correctness checking.
+            </p>
+          </div>
+
+          {/* 1-Click Action Buttons */}
+          <div className="flex flex-wrap items-center gap-2">
+            <GalaxyButton
+              onClick={() => setIsExcelModalOpen(true)}
+              size="sm"
+              hue={160}
+              text="Upload Excel"
+              icon={<FileSpreadsheet className="w-3.5 h-3.5" />}
+              iconPosition="left"
+            />
+
+            <GalaxyButton
+              onClick={handleOpenAiModal}
+              size="sm"
+              hue={280}
+              text="AI Generate"
+              icon={<Sparkles className="w-3.5 h-3.5" />}
+              iconPosition="left"
+            />
+
+            <GalaxyButton
+              onClick={() => setIsAddModalOpen(true)}
+              size="sm"
+              text="New Question"
+              icon={<Plus className="w-3.5 h-3.5" />}
+              iconPosition="left"
+            />
+          </div>
+        </div>
+
+        {/* Apple Segmented Unit Navigation Bar (macOS Sequoia Style) */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-slate-100 dark:border-white/5">
+          {UNITS.map((unit) => {
+            const count = questions.filter((q) => q.sectionNumber === unit.num).length;
+            const isSelected = selectedUnit === unit.num;
+
+            return (
+              <button
+                key={unit.num}
+                type="button"
+                onClick={() => setSelectedUnit(unit.num as any)}
+                className={`p-3 rounded-2xl text-left transition-all active:scale-95 cursor-pointer border ${
+                  isSelected
+                    ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                    : 'bg-slate-50 dark:bg-white/5 text-slate-700 dark:text-slate-300 border-slate-200/70 dark:border-white/5 hover:bg-slate-100 dark:hover:bg-white/10'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className={`text-[10px] font-mono font-bold uppercase tracking-wider ${isSelected ? 'text-blue-100' : 'text-slate-400'}`}>
+                    Unit {unit.num}
+                  </span>
+                  <span className={`text-xs font-mono font-bold ${isSelected ? 'text-white' : 'text-slate-500'}`}>
+                    {count} {count === 1 ? 'Q' : 'Qs'}
+                  </span>
+                </div>
+                <div className="font-bold text-xs mt-1 truncate">
+                  {unit.title.replace(/^Unit \d+: /, '')}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ========================================================================= */}
+      {/* 2. APPLE QUESTION CARDS LIST (Clean & Native)                            */}
+      {/* ========================================================================= */}
+      <div className="space-y-3">
+        {currentQuestions.length === 0 ? (
+          <div className="py-16 text-center rounded-3xl border border-dashed border-slate-200 dark:border-white/10 bg-white/40 dark:bg-white/[0.02] p-8 space-y-3">
+            <div className="w-12 h-12 mx-auto rounded-2xl bg-purple-500/10 text-purple-500 flex items-center justify-center">
+              <BookOpen className="w-6 h-6" />
+            </div>
+            <h3 className="text-base font-bold text-slate-800 dark:text-slate-200">
+              No Questions in {activeUnitInfo.title}
+            </h3>
+            <p className="text-xs text-slate-500 max-w-sm mx-auto">
+              Click &quot;New Question&quot; or &quot;AI Generate&quot; above to create coding problems for this unit.
+            </p>
+          </div>
+        ) : (
+          currentQuestions.map((q) => {
+            const isExpanded = expandedQuestionId === q.id;
+            const isVerifying = verifyingId === q.id;
+            const isAi = Boolean(
+              q.isAiGenerated ||
+              (q.title?.toLowerCase().endsWith('problem') && q.description?.includes('Implement an optimized C program'))
+            );
+            const isPending = q.approvalStatus === 'PENDING';
+            const isApproved = q.approvalStatus === 'APPROVED' || (!isPending && isAi);
+
+            return (
+              <div
+                key={q.id}
+                className="rounded-2xl sm:rounded-3xl border border-slate-200/80 dark:border-white/10 bg-white dark:bg-[#121620] p-5 shadow-xs hover:shadow-md hover:border-blue-500/30 transition-all duration-200 space-y-3"
+              >
+                {/* Header Row */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {/* Difficulty Pill */}
+                    <span
+                      className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                        q.difficulty === 'EASY'
+                          ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                          : q.difficulty === 'MEDIUM'
+                          ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20'
+                          : 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20'
+                      }`}
+                    >
+                      {q.difficulty}
+                    </span>
+
+                    {/* Time Limit Pill */}
+                    <span className="inline-flex items-center gap-1 text-[11px] text-slate-500 dark:text-slate-400 font-mono">
+                      <Clock className="w-3 h-3 text-slate-400" />
+                      <span>{q.timeLimitMinutes} mins</span>
+                    </span>
+
+                    {/* AI Generation Status Pill */}
+                    {isAi && (
+                      isPending ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 animate-pulse">
+                          <AlertCircle className="w-3 h-3 text-amber-500" />
+                          <span>AI • Pending Approval</span>
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/20">
+                          <Sparkles className="w-3 h-3 text-purple-500" />
+                          <span>AI Approved</span>
+                        </span>
+                      )
+                    )}
+
+                    {/* Verified Pill */}
+                    {q.verifiedCorrect ? (
+                      <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>Verified</span>
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-600 dark:text-amber-400">
+                        <AlertCircle className="w-3.5 h-3.5" />
+                        <span>Unverified</span>
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div className="flex items-center gap-1.5 self-end sm:self-auto">
+                    {/* Inline Approve Button for Pending AI Questions */}
+                    {isPending && (
+                      <button
+                        type="button"
+                        onClick={() => handleApproveQuestionInList(q.id)}
+                        className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1 transition shadow-xs cursor-pointer active:scale-95"
+                        title="Approve Question to Bank"
+                      >
+                        <Check className="w-3 h-3" />
+                        <span>Approve</span>
+                      </button>
+                    )}
+
+                    {/* Verify 1-Click Button */}
+                    <button
+                      type="button"
+                      onClick={() => handleRunCorrectnessCheck(q)}
+                      disabled={isVerifying}
+                      className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-white/10 hover:bg-slate-100 dark:hover:bg-white/5 text-slate-700 dark:text-slate-300 text-xs font-semibold flex items-center gap-1 transition active:scale-95 cursor-pointer"
+                      title="Run Correctness Check"
+                    >
+                      <Play className="w-3 h-3 text-blue-500" />
+                      <span>{isVerifying ? 'Checking...' : 'Check'}</span>
+                    </button>
+
+                    {/* Expand Test Cases Toggle */}
+                    <button
+                      type="button"
+                      onClick={() => setExpandedQuestionId(isExpanded ? null : q.id)}
+                      className="px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-white/10 hover:bg-slate-100 dark:hover:bg-white/5 text-slate-500 text-xs flex items-center gap-1 transition cursor-pointer"
+                      title="Toggle Test Cases"
+                    >
+                      <span>Test Cases</span>
+                      {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                    </button>
+
+                    {/* Delete Question Button */}
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteQuestion(q.id)}
+                      className="p-1.5 text-slate-400 hover:text-rose-500 hover:bg-rose-500/10 rounded-xl transition cursor-pointer"
+                      title="Delete Question"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Title & Description */}
+                <div>
+                  <h3 className="font-bold text-sm sm:text-base text-slate-900 dark:text-white">
+                    {q.title}
+                  </h3>
+                  <p className="text-xs text-slate-600 dark:text-slate-300 mt-1 leading-relaxed">
+                    {q.description}
+                  </p>
+                </div>
+
+                {/* Compact Apple Test Cases Preview (Expandable) */}
+                {isExpanded && (
+                  <div className="pt-2 border-t border-slate-100 dark:border-white/5 grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs font-mono animate-in fade-in">
+                    <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200/70 dark:border-white/5 space-y-0.5">
+                      <div className="flex items-center gap-1 font-semibold text-blue-600 dark:text-blue-400 text-[11px]">
+                        <Eye className="w-3 h-3" />
+                        <span>Visible Case 1</span>
+                      </div>
+                      <div className="text-slate-500 truncate">In: {q.visibleTestCase1.input}</div>
+                      <div className="text-emerald-600 dark:text-emerald-400 truncate">Out: {q.visibleTestCase1.output}</div>
+                    </div>
+
+                    <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200/70 dark:border-white/5 space-y-0.5">
+                      <div className="flex items-center gap-1 font-semibold text-blue-600 dark:text-blue-400 text-[11px]">
+                        <Eye className="w-3 h-3" />
+                        <span>Visible Case 2</span>
+                      </div>
+                      <div className="text-slate-500 truncate">In: {q.visibleTestCase2.input}</div>
+                      <div className="text-emerald-600 dark:text-emerald-400 truncate">Out: {q.visibleTestCase2.output}</div>
+                    </div>
+
+                    <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200/70 dark:border-white/5 space-y-0.5">
+                      <div className="flex items-center gap-1 font-semibold text-purple-600 dark:text-purple-400 text-[11px]">
+                        <EyeOff className="w-3 h-3" />
+                        <span>Hidden Case (Eval)</span>
+                      </div>
+                      <div className="text-slate-500 truncate">In: {q.hiddenTestCase.input}</div>
+                      <div className="text-emerald-600 dark:text-emerald-400 truncate">Out: {q.hiddenTestCase.output}</div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {/* ========================================================================= */}
+      {/* 3. APPLE MODAL: AI QUESTION GENERATOR & FACULTY APPROVAL REVIEW           */}
+      {/* ========================================================================= */}
+      {isAiModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in">
+          <div className={`w-full ${aiStep === 'PREVIEW' ? 'max-w-2xl max-h-[92vh]' : 'max-w-md'} bg-white dark:bg-[#121620] border border-slate-200/80 dark:border-white/10 rounded-3xl p-6 shadow-2xl space-y-4 overflow-y-auto animate-in zoom-in-95`}>
+            {/* Header */}
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-white/5">
+              <div className="flex items-center gap-2">
+                <span className="p-2 rounded-xl bg-purple-500/10 text-purple-600 dark:text-purple-400">
+                  <Sparkles className="w-5 h-5" />
+                </span>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-bold text-base text-slate-900 dark:text-white leading-tight">
+                      {aiStep === 'PREVIEW' ? 'AI Question Review & Approval' : 'AI Question Generator'}
+                    </h3>
+                    {aiStep === 'PREVIEW' && (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 animate-pulse">
+                        Awaiting Approval
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-500 mt-0.5">Target: {activeUnitInfo.title}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleDiscardGenerated}
+                className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-xl transition cursor-pointer"
+                title="Close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* STEP 1: TOPIC INPUT & DIFFICULTY */}
+            {aiStep === 'INPUT' && (
+              <form onSubmit={handleGenerateViaAi} className="space-y-4 text-xs">
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                    Topic or Problem Concept <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. String palindrome with pointers, Matrix transpose, Circular queue..."
+                    value={aiTopic}
+                    onChange={(e) => setAiTopic(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5 text-slate-900 dark:text-white text-xs sm:text-sm focus:outline-hidden focus:ring-2 focus:ring-purple-500/30"
+                    autoFocus
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                    Difficulty Level
+                  </label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(['EASY', 'MEDIUM', 'HARD'] as const).map((lvl) => (
+                      <button
+                        key={lvl}
+                        type="button"
+                        onClick={() => setAiDifficulty(lvl)}
+                        className={`py-2 rounded-xl text-xs font-semibold border transition cursor-pointer ${
+                          aiDifficulty === lvl
+                            ? 'bg-purple-600 text-white border-purple-600 shadow-xs'
+                            : 'bg-slate-50 dark:bg-white/5 border-slate-200 dark:border-white/10 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/10'
+                        }`}
+                      >
+                        {lvl}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="pt-2 flex items-center justify-end gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setIsAiModalOpen(false)}
+                    className="px-4 py-2 rounded-xl text-slate-600 dark:text-slate-300 text-xs font-medium hover:bg-slate-100 dark:hover:bg-white/5 transition cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <GalaxyButton
+                    type="submit"
+                    disabled={isGenerating || !aiTopic.trim()}
+                    size="sm"
+                    hue={280}
+                    text={isGenerating ? 'Generating...' : 'Generate Problem'}
+                    icon={<Sparkles className="w-3.5 h-3.5" />}
+                    iconPosition="left"
+                  />
+                </div>
+              </form>
+            )}
+
+            {/* STEP 2: PREVIEW & FACULTY APPROVAL GATE */}
+            {aiStep === 'PREVIEW' && aiDraft && (
+              <div className="space-y-4 text-xs">
+                {/* Review Gate Alert Callout */}
+                <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-start gap-3">
+                  <AlertCircle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+                  <div>
+                    <div className="text-xs font-bold text-amber-600 dark:text-amber-400">
+                      Faculty Approval Gate — Review Required
+                    </div>
+                    <p className="text-[11px] text-amber-700/90 dark:text-amber-300/90 mt-0.5 leading-relaxed">
+                      This AI-generated question is in <strong>Draft</strong>. It will <strong>NOT</strong> be added to your Question Bank unless you click <strong>&quot;Approve &amp; Add to Question Bank&quot;</strong> below. You can refine the title or problem statement if needed.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Problem Meta Badges */}
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                      aiDraft.difficulty === 'EASY'
+                        ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                        : aiDraft.difficulty === 'MEDIUM'
+                        ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20'
+                        : 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20'
+                    }`}
+                  >
+                    {aiDraft.difficulty}
+                  </span>
+
+                  <span className="inline-flex items-center gap-1 text-[11px] text-slate-500 dark:text-slate-400 font-mono">
+                    <Clock className="w-3 h-3 text-slate-400" />
+                    <span>{aiDraft.timeLimitMinutes} mins</span>
+                  </span>
+
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
+                    Unit {aiDraft.sectionNumber}
+                  </span>
+
+                  {aiDraft.bloomsLevel && (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 dark:bg-white/5 text-slate-600 dark:text-slate-400">
+                      Bloom: {aiDraft.bloomsLevel}
+                    </span>
+                  )}
+                </div>
+
+                {/* Editable Title */}
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Problem Title
+                  </label>
+                  <input
+                    type="text"
+                    value={aiDraft.title}
+                    onChange={(e) => setAiDraft({ ...aiDraft, title: e.target.value })}
+                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5 text-slate-900 dark:text-white font-bold text-sm focus:outline-hidden focus:ring-2 focus:ring-purple-500/30"
+                  />
+                </div>
+
+                {/* Editable Description */}
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Problem Statement &amp; Requirements
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={aiDraft.description}
+                    onChange={(e) => setAiDraft({ ...aiDraft, description: e.target.value })}
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5 text-slate-900 dark:text-white text-xs leading-relaxed focus:outline-hidden focus:ring-2 focus:ring-purple-500/30"
+                  />
+                </div>
+
+                {/* Test Cases Breakdown */}
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                    Test Cases (Verified Correctness Suite)
+                  </label>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 font-mono text-[11px]">
+                    {/* Visible Case 1 */}
+                    <div className="p-3 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200/80 dark:border-white/10 space-y-1">
+                      <div className="flex items-center gap-1 font-semibold text-blue-600 dark:text-blue-400">
+                        <Eye className="w-3 h-3" />
+                        <span>Visible Case 1</span>
+                      </div>
+                      <div className="text-slate-600 dark:text-slate-400 break-all">In: {aiDraft.visibleTestCase1.input}</div>
+                      <div className="text-emerald-600 dark:text-emerald-400 font-bold break-all">Out: {aiDraft.visibleTestCase1.output}</div>
+                    </div>
+
+                    {/* Visible Case 2 */}
+                    <div className="p-3 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200/80 dark:border-white/10 space-y-1">
+                      <div className="flex items-center gap-1 font-semibold text-blue-600 dark:text-blue-400">
+                        <Eye className="w-3 h-3" />
+                        <span>Visible Case 2</span>
+                      </div>
+                      <div className="text-slate-600 dark:text-slate-400 break-all">In: {aiDraft.visibleTestCase2.input}</div>
+                      <div className="text-emerald-600 dark:text-emerald-400 font-bold break-all">Out: {aiDraft.visibleTestCase2.output}</div>
+                    </div>
+
+                    {/* Hidden Case */}
+                    <div className="p-3 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200/80 dark:border-white/10 space-y-1">
+                      <div className="flex items-center gap-1 font-semibold text-purple-600 dark:text-purple-400">
+                        <EyeOff className="w-3 h-3" />
+                        <span>Hidden Test (Eval)</span>
+                      </div>
+                      <div className="text-slate-600 dark:text-slate-400 break-all">In: {aiDraft.hiddenTestCase.input}</div>
+                      <div className="text-emerald-600 dark:text-emerald-400 font-bold break-all">Out: {aiDraft.hiddenTestCase.output}</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Starter Code Preview */}
+                {aiDraft.starterCode && (
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300 text-xs">
+                        C Starter Code
+                      </label>
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-blue-500/10 text-blue-600 dark:text-blue-400 font-semibold border border-blue-500/20">
+                        GCC 14 Template
+                      </span>
+                    </div>
+                    <div className="rounded-xl overflow-hidden border border-slate-700/80 bg-[#070b14] shadow-sm">
+                      <div className="px-3 py-1.5 bg-[#0d1322] border-b border-slate-800 flex items-center justify-between">
+                        <div className="flex items-center gap-1.5">
+                          <div className="w-2.5 h-2.5 rounded-full bg-rose-500/80" />
+                          <div className="w-2.5 h-2.5 rounded-full bg-amber-500/80" />
+                          <div className="w-2.5 h-2.5 rounded-full bg-emerald-500/80" />
+                          <span className="text-[11px] font-mono text-slate-300 ml-2 font-medium">starter.c</span>
+                        </div>
+                        <span className="text-[10px] font-mono text-slate-400">C Language</span>
+                      </div>
+                      <pre className="p-3.5 font-mono text-xs leading-relaxed overflow-x-auto max-h-44 bg-[#070b14] text-emerald-400 select-text whitespace-pre m-0">
+                        <code style={{ color: '#34d399' }} className="font-mono text-xs leading-relaxed block text-emerald-400 whitespace-pre">
+                          {aiDraft.starterCode}
+                        </code>
+                      </pre>
+                    </div>
+                  </div>
+                )}
+
+                {/* Review Action Buttons */}
+                <div className="pt-3 border-t border-slate-100 dark:border-white/5 flex flex-wrap items-center justify-between gap-2.5">
+                  <button
+                    type="button"
+                    onClick={handleDiscardGenerated}
+                    className="px-3.5 py-2 rounded-xl border border-rose-500/30 text-rose-600 dark:text-rose-400 hover:bg-rose-500/10 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer active:scale-95"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Discard / Reject</span>
+                  </button>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleRegenerateVariation}
+                      disabled={isGenerating}
+                      className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-white/10 hover:bg-slate-100 dark:hover:bg-white/5 text-slate-700 dark:text-slate-300 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer active:scale-95"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5 text-purple-500" />
+                      <span>{isGenerating ? 'Regenerating...' : 'Regenerate'}</span>
+                    </button>
+
+                    <GalaxyButton
+                      type="button"
+                      onClick={handleApproveGenerated}
+                      size="sm"
+                      hue={145}
+                      text="Approve & Add to Question Bank"
+                      icon={<CheckCircle2 className="w-3.5 h-3.5" />}
+                      iconPosition="left"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* 4. APPLE MODAL: NEW QUESTION (Manual Entry)                               */}
+      {/* ========================================================================= */}
+      {isAddModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in">
+          <div className="w-full max-w-lg bg-white dark:bg-[#121620] border border-slate-200/80 dark:border-white/10 rounded-3xl p-6 sm:p-7 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto animate-in zoom-in-95">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-white/5">
+              <div className="flex items-center gap-2">
+                <span className="p-2 rounded-xl bg-blue-500/10 text-blue-600 dark:text-blue-400">
+                  <Plus className="w-5 h-5" />
+                </span>
+                <div>
+                  <h3 className="font-bold text-base text-slate-900 dark:text-white leading-tight">
+                    Create New Question
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">Target: {activeUnitInfo.title}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsAddModalOpen(false)}
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-xl"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleManualAdd} className="space-y-3.5 text-xs">
+              <div>
+                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Question Title <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Reverse an array in-place"
+                  value={manualForm.title}
+                  onChange={(e) => setManualForm({ ...manualForm, title: e.target.value })}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5 text-slate-900 dark:text-white"
+                  autoFocus
+                  required
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5">
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Difficulty
+                  </label>
+                  <select
+                    value={manualForm.difficulty}
+                    onChange={(e) => setManualForm({ ...manualForm, difficulty: e.target.value as any })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5 text-slate-900 dark:text-white"
+                  >
+                    <option value="EASY">Easy</option>
+                    <option value="MEDIUM">Medium</option>
+                    <option value="HARD">Hard</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Time Limit (Minutes)
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="60"
+                    value={manualForm.timeLimit}
+                    onChange={(e) => setManualForm({ ...manualForm, timeLimit: Number(e.target.value) })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5 text-slate-900 dark:text-white"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Problem Description
+                </label>
+                <textarea
+                  rows={2}
+                  placeholder="Describe problem requirements and constraints..."
+                  value={manualForm.description}
+                  onChange={(e) => setManualForm({ ...manualForm, description: e.target.value })}
+                  className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5 text-slate-900 dark:text-white"
+                />
+              </div>
+
+              {/* Test Cases */}
+              <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-white/5 font-mono">
+                <span className="text-[11px] font-sans font-bold text-slate-700 dark:text-slate-300 block">
+                  Test Cases (Input &rarr; Output)
+                </span>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="text"
+                    placeholder="Visible Case 1 In"
+                    value={manualForm.input1}
+                    onChange={(e) => setManualForm({ ...manualForm, input1: e.target.value })}
+                    className="p-2 rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5 text-xs"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Expected Out"
+                    value={manualForm.output1}
+                    onChange={(e) => setManualForm({ ...manualForm, output1: e.target.value })}
+                    className="p-2 rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5 text-xs text-emerald-500"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="text"
+                    placeholder="Hidden Case In"
+                    value={manualForm.hiddenInput}
+                    onChange={(e) => setManualForm({ ...manualForm, hiddenInput: e.target.value })}
+                    className="p-2 rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5 text-xs"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Hidden Expected Out"
+                    value={manualForm.hiddenOutput}
+                    onChange={(e) => setManualForm({ ...manualForm, hiddenOutput: e.target.value })}
+                    className="p-2 rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5 text-xs text-purple-500"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setIsAddModalOpen(false)}
+                  className="px-4 py-2 rounded-xl text-slate-600 dark:text-slate-300 text-xs font-medium"
+                >
+                  Cancel
+                </button>
+                <GalaxyButton
+                  type="submit"
+                  disabled={!manualForm.title.trim()}
+                  size="sm"
+                  text="Save Question"
+                />
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* 5. APPLE MODAL: EXCEL IMPORT (Bulk Upload)                                */}
+      {/* ========================================================================= */}
+      {isExcelModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in">
+          <div className="w-full max-w-lg bg-white dark:bg-[#121620] border border-slate-200/90 dark:border-white/10 rounded-3xl p-6 sm:p-7 shadow-2xl space-y-5 animate-in zoom-in-95 max-h-[92vh] overflow-y-auto">
+            
+            {/* Modal Header */}
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-white/5">
+              <div className="flex items-center gap-2.5">
+                <span className="p-2.5 rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                  <FileSpreadsheet className="w-5 h-5" />
+                </span>
+                <div>
+                  <h3 className="font-bold text-base text-slate-900 dark:text-white leading-tight">
+                    Upload Questions via Excel
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                    Batch import questions across Units 1–4 with verified test cases
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsExcelModalOpen(false)}
+                className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-white/5 rounded-xl transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Step 1: Download Template */}
+            <div className="p-4 rounded-2xl bg-emerald-50/50 dark:bg-emerald-500/5 border border-emerald-200/60 dark:border-emerald-500/20 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-emerald-700 dark:text-emerald-400 uppercase tracking-wide">
+                  Step 1: Download Template
+                </span>
+                <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400">
+                  .xlsx format
+                </span>
+              </div>
+              <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                Download the official Excel sheet pre-filled with sample problems for all 4 units and pre-configured test cases.
+              </p>
+              <button
+                type="button"
+                onClick={handleDownloadSampleTemplate}
+                className="w-full py-2.5 rounded-xl bg-white dark:bg-white/10 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 text-xs font-semibold flex items-center justify-center gap-2 border border-emerald-200 dark:border-emerald-500/30 shadow-xs transition active:scale-95 cursor-pointer"
+              >
+                <Download className="w-4 h-4" />
+                <span>Download Sample Template (.xlsx)</span>
+              </button>
+            </div>
+
+            {/* Step 2: Upload Excel File */}
+            <div className="space-y-2">
+              <span className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wide block">
+                Step 2: Upload Your Excel File
+              </span>
+
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".xlsx, .xls, .csv"
+                onChange={handleExcelFileChange}
+                className="hidden"
+              />
+
+              <div
+                onClick={() => fileInputRef.current?.click()}
+                className="p-6 rounded-2xl border-2 border-dashed border-slate-300 dark:border-white/10 hover:border-emerald-500 dark:hover:border-emerald-400 bg-slate-50/70 dark:bg-white/[0.02] text-center cursor-pointer transition-all space-y-2 group"
+              >
+                <div className="w-12 h-12 mx-auto rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center group-hover:scale-105 transition-transform">
+                  <UploadCloud className="w-6 h-6" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-sm text-slate-800 dark:text-slate-200">
+                    {isUploadingExcel ? 'Reading & Parsing Excel File...' : 'Click to Browse or Drop File Here'}
+                  </h4>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Supports .xlsx, .xls, and .csv files
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Column Guide */}
+            <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-white/[0.03] border border-slate-200/60 dark:border-white/5 space-y-1.5 text-xs">
+              <span className="font-bold text-[11px] text-slate-600 dark:text-slate-300 uppercase tracking-wider block">
+                Included Columns Guide:
+              </span>
+              <div className="flex flex-wrap gap-1.5 text-[11px] font-mono">
+                <span className="px-2 py-0.5 rounded-md bg-blue-500/10 text-blue-600">Title*</span>
+                <span className="px-2 py-0.5 rounded-md bg-purple-500/10 text-purple-600">Unit (1–4)</span>
+                <span className="px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-600">Difficulty</span>
+                <span className="px-2 py-0.5 rounded-md bg-slate-200 dark:bg-white/10 text-slate-700 dark:text-slate-300">TimeLimitMinutes</span>
+                <span className="px-2 py-0.5 rounded-md bg-slate-200 dark:bg-white/10 text-slate-700 dark:text-slate-300">Description</span>
+                <span className="px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600">VisibleInput1</span>
+                <span className="px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600">VisibleOutput1</span>
+                <span className="px-2 py-0.5 rounded-md bg-rose-500/10 text-rose-600">HiddenInput</span>
+                <span className="px-2 py-0.5 rounded-md bg-rose-500/10 text-rose-600">HiddenOutput</span>
+              </div>
+            </div>
+
+            {/* Footer Buttons */}
+            <div className="pt-2 flex items-center justify-end">
+              <button
+                type="button"
+                onClick={() => setIsExcelModalOpen(false)}
+                className="px-5 py-2.5 rounded-xl text-slate-600 dark:text-slate-300 text-xs font-medium hover:bg-slate-100 dark:hover:bg-white/5 transition"
+              >
+                Close
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};

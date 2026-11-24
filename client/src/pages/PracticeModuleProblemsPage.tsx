@@ -1,0 +1,474 @@
+import { toast } from 'sonner';
+import React, { useState, useEffect } from 'react';
+import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
+import { api } from '../api/client.js';
+import { auth, db } from '../config/firebase.js';
+import { supabase, isSupabaseConfigured } from '../config/supabase.js';
+import { doc, getDoc } from 'firebase/firestore';
+import { FirestoreDataService } from '../services/firestoreData.service.js';
+import { DifficultyBadge } from '../components/common/Badge.js';
+import { useAuth } from '../context/AuthContext.js';
+import { PRACTICE_CONFIG, isModule5UnlockedByAdmin } from '../config/practice.config.js';
+import { TOPIC_PRACTICE_DATA } from '../data/topic-practice.data.js';
+import { getSolvedPracticeTopicIds, markPracticeTopicSolved } from './TopicPracticeHubPage.js';
+import { getLabModuleUnlockInfo } from '../utils/progression.js';
+import {
+  ArrowLeft,
+  CheckCircle2,
+  Lock,
+  Code2,
+  ChevronRight,
+  BookOpen,
+  AlertCircle,
+  Eye,
+  Search,
+} from 'lucide-react';
+import { MotionSearchBar } from '../components/common/MotionSearchBar.js';
+
+interface PracticeProblemRow {
+  id: string;
+  slug: string;
+  title: string;
+  difficulty: 'EASY' | 'MEDIUM' | 'HARD';
+  category: string;
+  basePoints: number;
+  moduleOrder: number;
+  isSolved: boolean;
+  attemptsCount: number;
+  status: 'SOLVED' | 'ATTEMPTED' | 'NOT_STARTED';
+}
+
+export const PracticeModuleProblemsPage: React.FC = () => {
+  const { moduleSlug } = useParams<{ moduleSlug: string }>();
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'ADMIN';
+  const navigate = useNavigate();
+
+  const [filterDifficulty, setFilterDifficulty] = useState<'ALL' | 'EASY' | 'MEDIUM' | 'HARD' | 'UNSOLVED'>('ALL');
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const { data: modulesData } = useQuery({
+    queryKey: ['practice-modules'],
+    queryFn: () => api.get('/practice/modules'),
+  });
+
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['practice-module-problems', moduleSlug],
+    queryFn: () => api.get(`/practice/modules/${moduleSlug}/problems`),
+    retry: false,
+  });
+
+  const allModules = modulesData?.data?.modules || [];
+  const targetModuleIdx = PRACTICE_CONFIG.MODULES.findIndex((m) => m.slug === moduleSlug);
+  const targetModule = targetModuleIdx >= 0 ? PRACTICE_CONFIG.MODULES[targetModuleIdx] : null;
+
+  const effectiveUid = (user as any)?.uid || user?.id || auth.currentUser?.uid || 'anon';
+  const [solvedTopicIds, setSolvedTopicIds] = useState<string[]>(() => {
+    const list = getSolvedPracticeTopicIds(effectiveUid);
+    if (user?.prn) {
+      getSolvedPracticeTopicIds(user.prn).forEach((x) => !list.includes(x) && list.push(x));
+      try {
+        const raw = localStorage.getItem(`logicq_completed_problems_${user.prn.toUpperCase()}`) || localStorage.getItem(`logicq_solved_${user.prn.toUpperCase()}`);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) parsed.forEach((x) => !list.includes(x) && list.push(x));
+        }
+      } catch {}
+    }
+    if (Array.isArray((user as any)?.completedProblems)) {
+      (user as any).completedProblems.forEach((x: string) => !list.includes(x) && list.push(x));
+    }
+    return list;
+  });
+
+  // Sync and restore solved practice topics from Firestore and local storage
+  useEffect(() => {
+    (async () => {
+      try {
+        const prnClean = (user?.prn || '').toUpperCase().trim();
+        let cohortProblems: string[] = [];
+        if (prnClean) {
+          // 0. High-speed Supabase sync (immune to Firestore quota limits)
+          if (isSupabaseConfigured) {
+            try {
+              const { data: sbProg } = await supabase
+                .from('practice_progress')
+                .select('solved_topic_ids')
+                .eq('student_prn', prnClean)
+                .maybeSingle();
+              if (sbProg?.solved_topic_ids && Array.isArray(sbProg.solved_topic_ids)) {
+                cohortProblems = [...sbProg.solved_topic_ids];
+              }
+            } catch {}
+          }
+
+          try {
+            const cohortSnap = await getDoc(doc(db, 'cohort_progress', prnClean)).catch(() => null);
+            if (cohortSnap && cohortSnap.exists()) {
+              const cData = cohortSnap.data();
+              if (Array.isArray(cData?.completedProblems)) {
+                cohortProblems = cData.completedProblems;
+              }
+            }
+          } catch {}
+        }
+
+        const stats = await FirestoreDataService.getStatsBackup(effectiveUid);
+        const prog = await FirestoreDataService.getPracticeProgress(effectiveUid);
+        const cloudSolved = Array.from(
+          new Set([
+            ...cohortProblems,
+            ...(stats?.completedProblems || []),
+            ...(prog?.completedProblems || []),
+            ...getSolvedPracticeTopicIds(effectiveUid),
+            ...(user?.prn ? getSolvedPracticeTopicIds(user.prn) : []),
+          ])
+        );
+        if (cloudSolved.length > 0) {
+          cloudSolved.forEach((id) => {
+            markPracticeTopicSolved(id, effectiveUid);
+            if (user?.prn) markPracticeTopicSolved(id, user.prn);
+          });
+          setSolvedTopicIds(cloudSolved);
+        }
+      } catch (err) {
+        console.warn('PracticeModuleProblems restore error:', err);
+      }
+    })();
+  }, [user, effectiveUid]);
+
+  const unlockInfo = getLabModuleUnlockInfo(
+    targetModule?.order || (targetModuleIdx + 1),
+    solvedTopicIds,
+    Boolean(isAdmin || user?.role === 'FACULTY')
+  );
+  const isLockedByProgression = !unlockInfo.isUnlocked;
+  const lockReason = unlockInfo.lockReason;
+
+  // Read fallback solved slugs from localStorage
+  const fallbackSolvedSet = new Set<string>();
+  try {
+    const rawProg = localStorage.getItem('logicq_fallback_practice_progress_v1');
+    if (rawProg) {
+      const progMap = JSON.parse(rawProg);
+      Object.keys(progMap).forEach((k) => {
+        if (progMap[k]?.isSolved) {
+          const cleanSlug = k.includes(':') ? k.split(':')[1] : k;
+          fallbackSolvedSet.add(cleanSlug);
+        }
+      });
+    }
+  } catch {}
+
+  const moduleInfo = data?.data?.module;
+  const rawProblems: PracticeProblemRow[] = data?.data?.problems || [];
+  const problems: PracticeProblemRow[] = rawProblems.map((p) => {
+    const isTopicSolved =
+      solvedTopicIds.includes(p.slug) ||
+      solvedTopicIds.includes(p.id) ||
+      fallbackSolvedSet.has(p.slug) ||
+      fallbackSolvedSet.has(p.id) ||
+      solvedTopicIds.some((tid) => {
+        const match = TOPIC_PRACTICE_DATA.find((t) => t.id === tid);
+        return match && (match.id === p.id || match.id === p.slug || match.topicTitle.toLowerCase() === p.title.toLowerCase());
+      });
+    if (isTopicSolved || p.isSolved) {
+      return {
+        ...p,
+        isSolved: true,
+        status: 'SOLVED' as const,
+      };
+    }
+    return p;
+  });
+
+  // Automatically launch into direct JEE CBT Test Mode at the user's active / first unsolved question
+  React.useEffect(() => {
+    if (!isLockedByProgression && problems && problems.length > 0) {
+      // 1. Resume from saved last-active question if valid
+      const savedLastSlug = localStorage.getItem(`logicq_last_active_question_${moduleSlug}`);
+      const lastProb = savedLastSlug ? problems.find((p) => p.slug === savedLastSlug) : null;
+
+      // 2. Or continue at first unsolved question
+      const firstUnsolved = problems.find((p) => !p.isSolved);
+
+      // 3. Fallback to first problem
+      const target = lastProb || firstUnsolved || problems[0];
+      if (target?.slug) {
+        navigate(`/practice/${moduleSlug}/${target.slug}`, { replace: true });
+      }
+    }
+  }, [problems, isLockedByProgression, moduleSlug, navigate]);
+
+  const filteredProblems = problems.filter((p) => {
+    if (filterDifficulty === 'EASY' && p.difficulty !== 'EASY') return false;
+    if (filterDifficulty === 'MEDIUM' && p.difficulty !== 'MEDIUM') return false;
+    if (filterDifficulty === 'HARD' && p.difficulty !== 'HARD') return false;
+    if (filterDifficulty === 'UNSOLVED' && p.isSolved) return false;
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      return p.title.toLowerCase().includes(q) || p.category.toLowerCase().includes(q);
+    }
+    return true;
+  });
+
+  if (isLockedByProgression || error) {
+    const errObj = error as any;
+    if (isLockedByProgression || errObj?.status === 403 || errObj?.code === 'MODULE_LOCKED') {
+      return (
+        <div className="max-w-2xl mx-auto px-4 py-16 text-center space-y-4">
+          <div className="w-12 h-12 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center mx-auto text-amber-400">
+            <Lock className="w-6 h-6" />
+          </div>
+          <h2 className="text-xl font-bold text-[var(--text-main)]">Module Locked</h2>
+          <p className="text-sm text-[var(--text-muted)]">
+            {lockReason || errObj?.message || `You must solve all ${PRACTICE_CONFIG.practiceUnlockThreshold} questions in the previous module to unlock this module.`}
+          </p>
+          <div className="pt-2">
+            <Link
+              to="/practice"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[var(--bg-surface)] hover:bg-[var(--bg-surface-hover)] border border-[var(--border-line)] text-xs font-mono text-[var(--accent)] transition-colors"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              <span>Back to Practice Modules</span>
+            </Link>
+          </div>
+        </div>
+      );
+    }
+  }
+
+  return (
+    <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-8">
+      {/* Admin Preview Mode Notice */}
+      {isAdmin && (
+        <div className="flex items-center justify-between gap-3 p-3.5 rounded-xl bg-amber-50 border border-amber-300 dark:bg-amber-500/15 dark:border-amber-500/40 text-xs font-mono text-amber-950 dark:text-amber-200 shadow-sm">
+          <div className="flex items-center gap-2.5">
+            <Eye className="w-4 h-4 text-amber-700 dark:text-amber-400 shrink-0" />
+            <span>
+              <strong className="text-amber-950 dark:text-amber-100 font-bold">Admin Preview Mode:</strong> You can review and test questions across all curriculum modules.
+            </span>
+          </div>
+          <span className="px-2 py-0.5 rounded bg-amber-200 text-amber-950 dark:bg-amber-400/20 dark:text-amber-300 font-bold shrink-0">
+            ADMIN
+          </span>
+        </div>
+      )}
+
+      {/* Navigation & Header */}
+      <div>
+        <Link
+          to="/practice"
+          className="inline-flex items-center gap-1.5 text-xs font-mono text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors mb-4"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          <span>All Modules</span>
+        </Link>
+
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-[var(--border-line)] pb-6">
+          <div>
+            <div className="flex items-center gap-2 text-xs font-mono text-[var(--accent)] mb-1">
+              <span>MODULE {moduleInfo?.order || ''}</span>
+            </div>
+            <h1 className="text-2xl sm:text-3xl font-extrabold text-[var(--text-main)]">
+              {moduleInfo?.title || 'Practice Module'}
+            </h1>
+            <p className="text-xs sm:text-sm text-[var(--text-muted)] mt-1 max-w-2xl">
+              {moduleInfo?.description}
+            </p>
+          </div>
+
+          <div className="px-3.5 py-1.5 rounded-xl bg-[var(--bg-surface)] border border-[var(--border-line)] text-xs font-mono text-[var(--text-main)] font-semibold shrink-0">
+            <span>{problems.filter((p) => p.isSolved).length} of {problems.length} Solved</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Filter Tabs & Search Bar */}
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-1">
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 text-xs font-mono">
+          <button
+            type="button"
+            onClick={() => setFilterDifficulty('ALL')}
+            className={`px-3 py-1.5 rounded-lg border transition ${
+              filterDifficulty === 'ALL'
+                ? 'bg-[var(--accent)] text-[#0C0F1F] font-bold border-transparent'
+                : 'bg-[var(--bg-surface)] text-[var(--text-muted)] border-[var(--border-line)] hover:text-[var(--text-main)]'
+            }`}
+          >
+            All ({problems.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setFilterDifficulty('EASY')}
+            className={`px-3 py-1.5 rounded-lg border transition ${
+              filterDifficulty === 'EASY'
+                ? 'bg-emerald-500 text-white font-bold border-transparent'
+                : 'bg-[var(--bg-surface)] text-[var(--text-muted)] border-[var(--border-line)] hover:text-[var(--text-main)]'
+            }`}
+          >
+            Easy ({problems.filter((p) => p.difficulty === 'EASY').length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setFilterDifficulty('MEDIUM')}
+            className={`px-3 py-1.5 rounded-lg border transition ${
+              filterDifficulty === 'MEDIUM'
+                ? 'bg-amber-500 text-white font-bold border-transparent'
+                : 'bg-[var(--bg-surface)] text-[var(--text-muted)] border-[var(--border-line)] hover:text-[var(--text-main)]'
+            }`}
+          >
+            Medium ({problems.filter((p) => p.difficulty === 'MEDIUM').length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setFilterDifficulty('HARD')}
+            className={`px-3 py-1.5 rounded-lg border transition ${
+              filterDifficulty === 'HARD'
+                ? 'bg-rose-500 text-white font-bold border-transparent'
+                : 'bg-[var(--bg-surface)] text-[var(--text-muted)] border-[var(--border-line)] hover:text-[var(--text-main)]'
+            }`}
+          >
+            Hard ({problems.filter((p) => p.difficulty === 'HARD').length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setFilterDifficulty('UNSOLVED')}
+            className={`px-3 py-1.5 rounded-lg border transition ${
+              filterDifficulty === 'UNSOLVED'
+                ? 'bg-indigo-600 text-white font-bold border-transparent'
+                : 'bg-[var(--bg-surface)] text-[var(--text-muted)] border-[var(--border-line)] hover:text-[var(--text-main)]'
+            }`}
+          >
+            Unsolved ({problems.filter((p) => !p.isSolved).length})
+          </button>
+        </div>
+
+        {/* Search Input with 6 Motion Patterns */}
+        <MotionSearchBar
+          value={searchQuery}
+          onChange={setSearchQuery}
+          placeholder="Search module problems..."
+          className="sm:w-72"
+        />
+      </div>
+
+      {isLoading ? (
+        <div className="space-y-3">
+          {[1, 2, 3, 4, 5].map((i) => (
+            <div
+              key={i}
+              className="glass-card rounded-xl p-4 border border-[var(--border-line)] animate-pulse flex items-center justify-between"
+            >
+              <div className="h-5 w-1/3 bg-[var(--bg-surface)] rounded" />
+              <div className="h-5 w-20 bg-[var(--bg-surface)] rounded" />
+            </div>
+          ))}
+        </div>
+      ) : filteredProblems.length === 0 ? (
+        <div className="p-8 text-center glass-card rounded-2xl border border-[var(--border-line)] text-[var(--text-muted)] font-mono text-xs">
+          No practice problems match your filter.
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {filteredProblems.map((prob) => {
+            const sortedProblems = [...problems].sort((a, b) => a.moduleOrder - b.moduleOrder);
+            const probIdx = sortedProblems.findIndex((p) => p.id === prob.id);
+            const isProbLocked = probIdx > 0 && !sortedProblems[probIdx - 1]?.isSolved && !prob.isSolved && !isAdmin;
+
+            if (isProbLocked) {
+              return (
+                <div
+                  key={prob.id}
+                  onClick={() => toast.error(`🔒 Question #${prob.moduleOrder} is locked! Solve Question #${prob.moduleOrder - 1} first to unlock.`)}
+                  className="glass-card rounded-xl p-4 border border-[var(--border-line)] opacity-60 bg-[var(--bg-panel)]/40 cursor-not-allowed flex items-center justify-between gap-4 select-none"
+                >
+                  <div className="flex items-center gap-3.5 min-w-0">
+                    <span className="w-7 h-7 rounded-lg bg-[var(--bg-surface)] border border-slate-700/60 flex items-center justify-center text-xs font-mono font-semibold text-slate-500 shrink-0">
+                      <Lock className="w-3.5 h-3.5" />
+                    </span>
+
+                    <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-semibold text-slate-400 truncate">
+                      {prob.title}
+                    </h3>
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700/60">
+                      Locked
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 mt-1 text-xs text-[var(--text-muted)] font-mono">
+                    <span>{prob.category}</span>
+                    <span>•</span>
+                    <span className="text-amber-400/90 font-medium">Solve Question #{prob.moduleOrder - 1} first to unlock</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 shrink-0">
+                <DifficultyBadge difficulty={prob.difficulty as any} />
+                <span className="text-xs font-mono font-semibold px-2.5 py-1 rounded-lg bg-slate-800/80 text-slate-400 border border-slate-700/60 flex items-center gap-1.5 shadow-xs">
+                  <Lock className="w-3.5 h-3.5 text-slate-400" />
+                  <span>Locked</span>
+                </span>
+              </div>
+            </div>
+          );
+        }
+
+            return (
+              <Link
+                key={prob.id}
+                to={`/practice/${moduleSlug}/${prob.slug}`}
+                className="glass-card rounded-xl p-4 border border-[var(--border-line)] hover:border-[var(--accent)]/50 hover:bg-[var(--bg-surface)]/60 transition-all flex items-center justify-between gap-4 group"
+              >
+                <div className="flex items-center gap-3.5 min-w-0">
+                  <span className="w-7 h-7 rounded-lg bg-[var(--bg-surface)] border border-[var(--border-line)] flex items-center justify-center text-xs font-mono font-semibold text-[var(--text-muted)] group-hover:text-[var(--accent)] shrink-0">
+                    {prob.moduleOrder}
+                  </span>
+
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-sm font-semibold text-[var(--text-main)] truncate group-hover:text-[var(--accent)] transition-colors">
+                        {prob.title}
+                      </h3>
+                      {prob.isSolved && (
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 mt-1 text-xs text-[var(--text-muted)] font-mono">
+                      <span>{prob.category}</span>
+                      <span>•</span>
+                      <span>
+                        {prob.attemptsCount === 0
+                          ? 'Not attempted'
+                          : `${prob.attemptsCount} attempt${prob.attemptsCount > 1 ? 's' : ''}`}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3 shrink-0">
+                  <DifficultyBadge difficulty={prob.difficulty as any} />
+                  {prob.status === 'SOLVED' && (
+                    <span className="text-xs font-mono font-semibold px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3" />
+                      <span>SOLVED</span>
+                    </span>
+                  )}
+                  {prob.status === 'ATTEMPTED' && (
+                    <span className="text-xs font-mono font-semibold px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/30">
+                      ATTEMPTED
+                    </span>
+                  )}
+                  <ChevronRight className="w-4 h-4 text-[var(--text-muted)] group-hover:text-[var(--accent)] group-hover:translate-x-0.5 transition-all" />
+                </div>
+              </Link>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};

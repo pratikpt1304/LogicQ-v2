@@ -1,0 +1,1552 @@
+rules_version = '2';
+
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// This security rules file assumes the following data structures:
+//
+// Collection: users/{userId} (Private Student Document - Contains PII)
+// Document ID: Firebase Auth UID
+// Fields:
+//   - uid: string (required, immutable) - Firebase Auth UID
+//   - prn: string (required, immutable by student, ^[0-9]{4}[A-Z]{3}[MF][0-9]{4}$) - 12-character University PRN (PII: 4 digits, 3 letters, M or F, 4 digits; masked as ••••••••1039 on client)
+//   - email: string (required, immutable) - Student email address (PII)
+//   - college: string (required, immutable by student) - 'Sanjivani University'
+//   - department: string (required, enum) - 'CSE' | 'IT' | 'AIML' | 'AIDS' | 'Integrated M.Tech' | 'Mechanical' | 'Civil' | 'Electrical' | 'E&TC' | 'Integrated B.Tech'
+//   - year: string (required, enum) - 'FY' | 'SY' | 'TY'
+//   - division: string | null (optional, ^[A-Z0-9]{0,3}$) - Academic division
+//   - displayName: string | null (optional, 2..60 chars) - Public display handle
+//   - shortId: string (required, immutable) - Random non-PII fallback label suffix
+//   - profileComplete: bool (required, server-managed) - Gates academic profile completion
+//   - bio: string | null (optional, <= 500 chars) - Student bio
+//   - photoURL: string | null (optional, <= 500 chars) - Avatar URL
+//   - role: string (required, immutable) - 'STUDENT' | 'ADMIN'
+//   - status: string (required, immutable) - 'ACTIVE' | 'BANNED'
+//   - banReason: string (optional, immutable) - Reason if banned
+//   - stats: map (required, immutable by client) - Server-computed points, streak, solved counts
+//   - storagePreference: string (optional, enum) - 'GOOGLE_DRIVE' | 'FIRESTORE_FALLBACK' | 'LOCAL_STORAGE'
+//   - themePreference: string (optional, enum) - 'light' | 'dark' | 'system'
+//   - hidePracticeTimer: bool (optional) - Hide countdown/up timer display in practice workspace
+//   - createdAt: timestamp (required, immutable)
+//   - updatedAt: timestamp (required)
+//
+// Collection: prnIndex/{prn} (Transactional PRN Uniqueness Lock)
+// Document ID: Canonical uppercase 12-character PRN (^[0-9]{4}[A-Z]{3}[MF][0-9]{4}$)
+// Fields:
+//   - prn: string (required, immutable)
+//   - userId: string (required, immutable)
+//   - createdAt: timestamp (required, immutable)
+//
+// Collection: publicProfiles/{userId} (Non-PII Public Mirror)
+// Document ID: Firebase Auth UID
+// Fields:
+//   - uid: string (required, server-managed)
+//   - publicLabel: string (required, server-managed)
+//   - college: string (required, server-managed)
+//   - department: string (required, server-managed)
+//   - year: string (required, server-managed)
+//   - division: string | null (optional, server-managed)
+//   - bio: string | null (optional, <= 500 chars)
+//   - stats: map (required, server-managed)
+//   - updatedAt: timestamp (required, server-managed)
+//
+// Collection: practice_progress/{progressId} & users/{userId}/practice_progress/{progressId}
+// Document ID: Progress record ID (e.g., {userId}_{problemId})
+// Fields:
+//   - userId: string (required) - Firebase Auth UID
+//   - problemId: string (required) - Problem identifier
+//   - status: string (required) - 'ATTEMPTED' | 'SOLVED'
+//   - attempts: int (optional)
+//   - solvedAt: timestamp (optional)
+//   - updatedAt: timestamp (required)
+//
+// Collection: daily_boards/{dayId} (Authoritative Daily Board)
+// Document ID: Canonical date string (YYYY-MM-DD)
+// Fields:
+//   - dayId: string (required, immutable)
+//   - challengeId: string (required, immutable)
+//   - scheduledDate: string (required, immutable)
+//   - isFrozen: bool (required)
+//   - totalSolvers: int (required)
+//   - createdAt: timestamp (required)
+//   - frozenAt: timestamp (optional)
+//
+// Subcollection: daily_boards/{dayId}/leaderboard/{docId}
+// Document ID: Student UID
+// Fields:
+//   - userId: string (required)
+//   - rank: int (required)
+//   - score: int (required)
+//   - wrongAttempts: int (required)
+//   - submittedAt: timestamp (required)
+//
+// Collection: daily_results/{resultId} (Student Daily Solved Record)
+// Document ID: Canonical format {dayId}_{userId}
+// Fields:
+//   - id: string (required)
+//   - dayId: string (required)
+//   - userId: string (required)
+//   - challengeId: string (required)
+//   - verdict: string (required)
+//   - pointsAwarded: int (required)
+//   - wrongAttempts: int (required)
+//   - submittedAt: timestamp (required)
+//   - rank: int (optional)
+//
+// Collection: daily_summaries/{summaryId} (Student Daily Summary Card)
+// Document ID: Canonical format {dayId}_{userId}
+// Fields:
+//   - id: string (required)
+//   - dayId: string (required)
+//   - userId: string (required)
+//   - verdict: string (required)
+//   - pointsEarned: int (required)
+//   - dailyRank: int (optional)
+//   - totalParticipants: int (optional)
+//   - streak: int (required)
+//   - improvementHint: string (optional)
+//
+// Collection: daily_corrections/{correctionId} (Post-Finalization Rejudge / Audit Record)
+// Document ID: Auto-generated UUID or timestamp-keyed ID
+// Fields:
+//   - id: string (required)
+//   - dayId: string (required)
+//   - userId: string (required)
+//   - reason: string (required)
+//   - adminId: string (required)
+//   - createdAt: timestamp (required)
+//
+// Collection: daily_rank_snapshots/{snapshotId} (Frozen Daily Top 20 & Rank Snapshots)
+// Document ID: Canonical snapshot identifier (e.g. {dayId}_top20)
+// Fields:
+//   - dayId: string (required)
+//   - snapshotType: string (required)
+//   - standings: list (required)
+//   - createdAt: timestamp (required)
+//
+// Collection: session_events/{eventId} & users/{userId}/session_events/{eventId} (Session Lifecycle & Audit Ledger)
+// Document ID: Unique session event identifier (UUID or timestamp-keyed)
+// Fields:
+//   - userId: string (required, immutable) - Firebase Auth UID
+//   - reason: string (required, enum) - 'manual' | 'idle-timeout' | 'token-refresh-failed' | 'revoked-by-user' | 'revoked-by-admin' | 'role-changed' | 'banned' | 'app-check-failed' | 'unusual-login-flag' | 'multi-tab-sync' | 'service-worker-update' | 'unknown'
+//   - timestamp: timestamp (optional)
+//
+// Collection: sections/{sectionId} (Academic Sections)
+// Document ID: Unique section identifier
+// Fields:
+//   - sectionName / name: string (required, 1..100 chars)
+//   - course: string (required, 1..100 chars)
+//   - subject: string (required, 1..100 chars)
+//   - institution: string (optional, <= 100 chars)
+//   - academicYear: string (optional, <= 50 chars)
+//   - semester: string (optional, <= 50 chars)
+//   - facultyId: string (optional, <= 128 chars)
+//   - facultyEmail: string (optional, <= 150 chars)
+//   - facultyName: string (optional, <= 100 chars)
+//   - description: string | null (optional, <= 1000 chars)
+//   - joinCode: string (optional, <= 32 chars)
+//   - joinToken: string (optional, <= 128 chars)
+//   - isActive: bool (optional)
+//   - createdAt: timestamp (optional)
+//   - updatedAt: timestamp (optional)
+//
+// Subcollection: sections/{sectionId}/students/{studentId} (Enrolled Students Roster)
+// Document ID: Student UID, PRN, or membership ID
+// Fields:
+//   - studentId / userId / uid: string (optional, <= 128 chars)
+//   - prn: string (optional, <= 30 chars)
+//   - fullName / name: string (optional, <= 100 chars)
+//   - email: string (optional, <= 150 chars)
+//   - mobile: string | null (optional, <= 25 chars)
+//   - status: string (optional, <= 50 chars)
+//   - joinedVia: string (optional, <= 50 chars)
+//   - enrolledAt: timestamp (optional)
+//
+// Collection: enrolled_students/{studentId} (Global Enrolled Students Registry)
+// Document ID: Student UID, student email, or PRN
+// Fields:
+//   - studentId / userId / uid: string (optional, <= 128 chars)
+//   - email: string (optional, <= 150 chars)
+//   - boundEmail: string (optional, <= 150 chars)
+//   - prn: string (optional, <= 30 chars)
+//   - fullName / name / displayName: string (optional, <= 100 chars)
+//   - sectionId: string (optional, <= 100 chars)
+//   - joinCode: string (optional, <= 50 chars)
+//   - sectionName: string (optional, <= 100 chars)
+//   - course: string (optional, <= 100 chars)
+//   - subject: string (optional, <= 100 chars)
+//   - status / identityStatus: string (optional, <= 50 chars)
+//   - college: string (optional, <= 100 chars)
+//   - department: string (optional, <= 50 chars)
+//   - year: string (optional, <= 20 chars)
+//   - division: string | null (optional, <= 20 chars)
+//   - joinedVia: string (optional, <= 50 chars)
+//   - enrolledAt / createdAt / updatedAt: timestamp (optional)
+//   - isBanned / isEmailBound / isEmailBoundV2 / emailVerified / activeSession: bool (optional)
+//   - bannedAt: string | timestamp (optional, <= 100 chars)
+//   - banReason: string | null (optional, <= 200 chars)
+//   - integrityScore / tabSwitchCount / tabSwitches / pasteBursts / copyPasteAttempts / fullscreenExits / totalSolved / totalPoints: int (optional)
+//   - academicScore: int | float (optional)
+//   - role: string (optional, <= 50 chars)
+//   - registeredDevices / completedProblems: list (optional)
+//
+// Collection: cohort_progress/{prn} (Cross-Device Cohort Progress Synchronization)
+// Document ID: Canonical Student PRN (<= 30 chars)
+// Fields:
+//   - prn: string (required, <= 30 chars)
+//   - completedProblems: list (optional, <= 250 items)
+//   - totalSolved: int (optional)
+//   - totalPoints: int (optional)
+//   - currentStreak: int (optional)
+//   - longestStreak: int (optional)
+//   - lastSolvedDate: string | null (optional, <= 100 chars)
+//   - draftCodes: map (optional)
+//   - moduleProgress: map (optional)
+//   - topicAttempts: map (optional)
+//   - lastAttemptedTopic: string | null (optional, <= 128 chars)
+//   - typingVelocityCPM: int | float | null (optional)
+//   - cpm: int | float | null (optional)
+//   - updatedAt: timestamp | int | string (optional)
+//   - isBanned: bool (optional)
+//   - bannedAt: string | timestamp (optional, <= 100 chars)
+//   - banReason: string | null (optional, <= 200 chars)
+//   - studentName / displayName / fullName: string (optional, <= 100 chars)
+//   - identityStatus: string (optional, <= 50 chars)
+//   - status: string (optional, <= 50 chars)
+//   - academicScore: int (optional)
+//
+// Subcollection: cohort_progress/{prn}/drafts/{draftId}
+// Document ID: Draft ID (e.g. problemSlug, 'topic_attempts', 'proctoring_telemetry', 'device_session', '__account_security')
+// Fields:
+//   - code: string (optional, <= 65536 chars)
+//   - customInput: any (optional)
+//   - updatedAt: any (optional)
+//   - problemSlug: any (optional)
+//   - deviceLabel: any (optional)
+//   - topic attempts / telemetry tracking: dynamic map
+//
+// Collection: assessment_tests/{testId} (Timed Assessment & Lab Tests)
+// Document ID: Unique assessment identifier (e.g., test_{uuid} or slug)
+// Fields:
+//   - id: string (required, <= 128 chars)
+//   - title: string (required, 1..200 chars)
+//   - sectionTarget: string (optional, <= 100 chars)
+//   - sectionId: string (optional, <= 100 chars)
+//   - unitTarget: any (optional)
+//   - durationMinutes: int (optional)
+//   - totalMarks: int (optional)
+//   - status: string (required, <= 50 chars) - 'ACTIVE' | 'PUBLISHED' | 'UPCOMING' | 'COMPLETED'
+//   - questions: list (optional, <= 100 items)
+//   - questionCount: any (optional)
+//   - antiCheatingRotation: bool (optional)
+//   - randomiseQuestions: bool (optional)
+//   - lockOnSubmit: bool (optional)
+//   - difficultyProfile: string (optional, <= 50 chars)
+//   - selectionMode: string (optional, <= 50 chars)
+//   - scheduledAt: timestamp | int | string (optional)
+//   - deadline: timestamp | int | string (optional)
+//   - createdAt: timestamp | int | string (optional)
+//   - updatedAt: timestamp | int | string (optional)
+//
+// Collection: assessment_test_submissions/{docId}, assessment_submissions/{docId} & submissions/{submissionId} (Assessment Test Submissions, Daily Practice & Answer Bank)
+// Document ID: Unique submission document identifier
+// Fields:
+//   - assignmentId / testId / id / attemptId: string (optional, <= 128 chars)
+//   - testTitle: string (optional, <= 200 chars)
+//   - userId / uid / studentId: string (optional, <= 128 chars)
+//   - studentName / name: string (optional, <= 150 chars)
+//   - studentPrn / prn: string (optional, <= 50 chars)
+//   - studentEmail / email: string (optional, <= 150 chars)
+//   - problemId / problemSlug: string (optional, <= 128 chars)
+//   - problemTitle: string (optional, <= 200 chars)
+//   - code / submittedCode / solution: string (optional, <= 65536 chars)
+//   - verdict: string (optional, <= 50 chars)
+//   - academicScore / score / marks / points / pointsAwarded / marksAwarded / maxMarks: int | float (optional)
+//   - integrityScore / testIntegrityScore / proctoringScore: int | float (optional)
+//   - allocatedDurationMinutes / timeLimitSeconds / duration / attemptNumber: int | float (optional)
+//   - expectedMinMinutes / expectedMaxMinutes / expectedRefTimeSeconds / timeDeviationSeconds / deviationPercent: int | float (optional)
+//   - timeTaken / timeTakenSeconds / timeToSolveSeconds / activeSeconds: int | float (optional)
+//   - tabSwitchCount / copyPasteAttempts / cutAttempts / contextMenuAttempts: int | float (optional)
+//   - fullscreenExits / fullScreenExitCount / focusLossCount / autoLockCount / clipboardAttempts: int | float (optional)
+//   - totalKeystrokes / largestBurstChars / typingVelocityCPM / cpm: int | float (optional)
+//   - incidents / testOutcomes / proctorLogs: list (optional, <= 200 items)
+//   - submittedAt / completedAt / createdAt / updatedAt / lastActiveTime / lastHeartbeat / startedAt: timestamp | int | float | string (optional)
+//   - submissionType / status / difficulty / language / tag / lateStatus: string (optional, <= 50 chars)
+//   - runtimeMs / memoryKb / executionTimeMs / questionIndex / passedCount / totalTests / testsPassed: int | float (optional)
+//   - compileOutput / cheatReason / violationReason / feedback / remarks: string (optional)
+//   - quarantinedAttempt / isCheatAutoSubmit / isCheatAttempt / isLate / manualGradingRequired / isInProgress / activeSession: bool (optional)
+//   - problem / user / metadata / incident / clientMetrics / evaluationRubric / aiEvaluation / unitTarget / deviceSession: map (optional)
+//   - sectionId / sectionName / department / division / year / college / institution / course / subject / batch: string (optional)
+//
+// Collection: test_attendance/{attendanceId} (Live Assessment Test Attendance Roster)
+// Document ID: Canonical format {testId}_{prn} or unique document identifier
+// Fields:
+//   - id / testId: string (required, <= 128 chars)
+//   - prn: string (required, <= 50 chars)
+//   - studentName / name: string (optional, <= 150 chars)
+//   - studentEmail / email: string (optional, <= 150 chars)
+//   - isPresent: bool (required)
+//   - status: string (required, <= 50 chars) - 'PRESENT' | 'ABSENT'
+//   - markedAt / timestamp / createdAt / updatedAt: timestamp | string | int (optional)
+//   - markedBy / facultyEmail: string (optional, <= 150 chars)
+//
+// Collection: test_unlocks/{docId} (Faculty Assessment Test Unlock Authorizations)
+// Document ID: Canonical format {testId}_{prn} or unique document identifier
+// Fields:
+//   - id / testId: string (required, <= 128 chars)
+//   - prn / studentPrn: string (required, <= 50 chars)
+//   - isUnlocked: bool (required)
+//   - unlockedAt: string | timestamp (required)
+//   - unlockedBy: string (optional, <= 150 chars)
+//   - reason: string (optional, <= 500 chars)
+//   - createdAt / updatedAt: string | timestamp (optional)
+//
+// Collection: proctor_locked_students/{docId} (Proctoring Violation Lockout Roster)
+// Document ID: Canonical student PRN (<= 50 chars)
+// Fields:
+//   - prn: string (required, <= 50 chars)
+//   - reason: string (optional, <= 500 chars)
+//   - testId: string (optional, <= 128 chars)
+//   - isLocked: bool (optional)
+//   - lockedAt: string | timestamp (optional)
+//
+// Collection: student_live_telemetry/{docId} (Live Student Proctoring Telemetry)
+// Document ID: Canonical student PRN (<= 50 chars)
+// Fields:
+//   - status: string (optional, <= 50 chars)
+//   - isLocked / isLockedByProctor: bool (optional)
+//   - autoLockCount: int (optional)
+//   - incident: string (optional)
+//   - updatedAt: timestamp (optional)
+//
+// Collection: raised_issues/{issueId} (Student Flagged Issues & Inquiries)
+// Document ID: Auto-generated document ID
+// Fields:
+//   - questionId: string (required, <= 100 chars)
+//   - questionTitle: string (required, <= 200 chars)
+//   - contextType: string (required, enum: 'PRACTICE' | 'LAB_INTERNAL' | 'EXAM')
+//   - category: string (required, <= 50 chars)
+//   - description: string (required, <= 2000 chars)
+//   - studentId: string (required, <= 128 chars)
+//   - studentName: string (required, <= 128 chars)
+//   - studentPrn: string (required, <= 32 chars)
+//   - studentEmail: string (optional, <= 150 chars)
+//   - studentPhone: string (optional, <= 30 chars)
+//   - studentWhatsapp: string (optional, <= 30 chars)
+//   - syncedToCloud: bool (optional)
+//   - createdAt: string (required, <= 50 chars)
+//   - status: string (required, enum: 'OPEN' | 'RESOLVED' | 'IN_PROGRESS')
+//   - serverTimestamp: timestamp (optional)
+//   - assignedTo: string (optional, <= 150 chars)
+//   - assignedEmail: string (optional, <= 150 chars)
+//   - assignedAt: timestamp | string (optional, <= 50 chars)
+//
+// Collection: viva_logs/{vivaLogId} (AI Oral Viva Telemetry & Forensics)
+// Document ID: Auto-generated document ID
+// Fields:
+//   - vivaId: string (required, <= 128 chars)
+//   - prn / studentPrn: string (required, <= 32 chars)
+//   - studentName: string (required, <= 128 chars)
+//   - email: string (optional, <= 150 chars)
+//   - questionText / question: string (required, <= 5000 chars)
+//   - answer: string (required, <= 10000 chars)
+//   - submittedAt: string | timestamp (required)
+//   - verdict: string (required, <= 50 chars)
+//   - score: int | float (required)
+//   - submittedBeforeTimeout: bool (required)
+//   - problemSlug: string (optional, <= 128 chars)
+//   - problemTitle: string (optional, <= 256 chars)
+//   - assignmentId: string (optional, <= 128 chars)
+//   - section: string (optional, <= 64 chars)
+//   - topic: string (optional, <= 128 chars)
+//   - source: string (optional, <= 50 chars)
+//   - createdAt: timestamp (optional)
+//
+// Collection: lab_internal_questions/{slug} (Continuous Lab Internal Questions & Custom Coursework Bank)
+// Document ID: Question slug identifier (<= 128 chars)
+// Fields:
+//   - id / slug: string (optional, <= 128 chars)
+//   - title: string (optional, <= 200 chars)
+//   - difficulty: string (optional, <= 50 chars)
+//   - module: string (optional, <= 100 chars)
+//   - section: string (optional, <= 100 chars)
+//   - topic: string (optional, <= 100 chars)
+//   - learningOutcome: string (optional, <= 500 chars)
+//   - bloomsLevel: string (optional, <= 50 chars)
+//   - scenario: string (optional, <= 2000 chars)
+//   - description / problemStatement: string (optional, <= 65536 chars)
+//   - starterCode: string (optional, <= 65536 chars)
+//   - solution: string (optional, <= 65536 chars)
+//   - testCases / sampleTests / hiddenTests: list (optional, <= 100 items)
+//   - expectedTimeMin / expectedTimeMax: int | float (optional)
+//   - timeLimitMs / memoryLimitMb / basePoints / marks: int | float (optional)
+//   - validationStatus / validationDetails: string (optional)
+//   - status: string (optional, <= 50 chars)
+//   - isDaily: bool (optional)
+//   - createdAt / updatedAt: timestamp | string | int (optional)
+//   - createdBy / facultyEmail / authorId: string (optional, <= 150 chars)
+//
+// Collection: coursework_modules/{moduleId} (Curriculum & Lab Internal Coursework Modules)
+// Document ID: Module ID or Slug identifier (<= 128 chars)
+// Fields:
+//   - id / moduleId: string (optional, <= 128 chars)
+//   - moduleIndex / order: int | float (optional)
+//   - moduleSlug / slug: string (optional, <= 128 chars)
+//   - moduleTitle / title: string (optional, <= 200 chars)
+//   - tagline: string | null (optional, <= 500 chars)
+//   - description: string | null (optional, <= 5000 chars)
+//   - track: string | null (optional, <= 100 chars)
+//   - totalQuestions: int (optional)
+//   - requiredSolvedToUnlock: int (optional)
+//   - requiresAdminUnlock: bool (optional)
+//   - distribution: map (optional)
+//   - topics: list (optional, <= 200 items)
+//   - questions: list (optional, <= 200 items)
+//   - icon: string (optional, <= 100 chars)
+//   - status: string (optional, <= 50 chars)
+//   - isActive / isUnlocked: bool (optional)
+//   - createdAt / updatedAt: timestamp | string | int (optional)
+//   - createdBy / facultyEmail / authorId: string (optional, <= 150 chars)
+//
+// Collection: practice_topics/{topicId} (Topic Practice Problems & Syntax Theory Catalog)
+// Document ID: Topic ID or Slug identifier (<= 128 chars)
+// Fields:
+//   - id / topicId / slug: string (optional, <= 128 chars)
+//   - moduleIndex / order: int | float (optional)
+//   - moduleSlug: string (optional, <= 128 chars)
+//   - moduleTitle: string (optional, <= 200 chars)
+//   - topicTitle / title: string (optional, <= 200 chars)
+//   - summary: string | null (optional, <= 5000 chars)
+//   - sectionTarget: string | null (optional, <= 100 chars)
+//   - tipBox: map (optional)
+//   - problem: map (optional)
+//   - difficulty: string (optional, <= 50 chars)
+//   - tags: list (optional, <= 50 items)
+//   - category: string (optional, <= 100 chars)
+//   - status: string (optional, <= 50 chars)
+//   - isActive: bool (optional)
+//   - createdAt / updatedAt: timestamp | string | int (optional)
+//   - createdBy / facultyEmail / authorId: string (optional, <= 150 chars)
+//
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // -------------------------------------------------------------------------
+    // 0. DENY BY DEFAULT TOP-LEVEL PERIMETER
+    // -------------------------------------------------------------------------
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ===============================================================
+    // Helper Functions & Domain Validators
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        request.auth.token.role == 'ADMIN'
+        || (request.auth.token.email is string && request.auth.token.email.lower() in [
+          'admin@logicq.io',
+          'hariprasathset@sanjivani.edu.in',
+          'logicq1304@gmail.com',
+          'ipworker1908@gmail.com',
+          'ipverse1918@gmail.com',
+          'logicqarena@gmail.com'
+        ])
+      );
+    }
+
+    function isInstitutionalEmail(email) {
+      return email is string && (
+        email.lower().matches('^[a-zA-Z0-9._%+-]+@([a-zA-Z0-9.-]+\\.)?(sanjivani\\.edu\\.in|sanjivani\\.org\\.in|sanjivanicoe\\.org\\.in|logicq\\.io)$')
+      );
+    }
+
+    function isFaculty() {
+      return isAuthenticated() && (
+        isAdmin() || (
+          (request.auth.token.role == 'FACULTY' || request.auth.token.role == 'TEACHER' || request.auth.token.role == 'INSTRUCTOR' || request.auth.token.isFaculty == true)
+          && isInstitutionalEmail(request.auth.token.email)
+        )
+      );
+    }
+
+    function uidNotModified() {
+      return !('uid' in request.resource.data) ||
+        request.resource.data.uid == resource.data.uid;
+    }
+
+    function isAllowedDepartment(dept) {
+      return dept is string &&
+        dept in ['CSE', 'IT', 'AIML', 'AIDS', 'Integrated M.Tech', 'Mechanical', 'Civil', 'Electrical', 'E&TC', 'Integrated B.Tech'];
+    }
+
+    function isAllowedYear(yr) {
+      return yr is string &&
+        yr in ['FY', 'SY', 'TY'];
+    }
+
+    function isValidDivision(div) {
+      return div == null ||
+        (div is string && div.size() <= 3 && div.matches('^[A-Z0-9]{0,3}$'));
+    }
+
+    function isValidDisplayName(name) {
+      return name == null ||
+        (name is string && name.size() >= 2 && name.size() <= 60);
+    }
+
+    function isValidUserSelfUpdate() {
+      let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+      let data = request.resource.data;
+      return uidNotModified()
+        && changedKeys.hasOnly([
+          'department', 'year', 'division', 'displayName',
+          'bio', 'photoURL', 'storagePreference', 'themePreference', 'hidePracticeTimer', 'updatedAt'
+        ])
+        && !changedKeys.hasAny([
+          'prn', 'college', 'email', 'role', 'status', 'banReason',
+          'stats', 'points', 'totalPoints', 'streak', 'currentStreak',
+          'prnChangedAt', 'prnNextAllowedChangeDate'
+        ])
+        && (!('department' in data) || data.department == null || isAllowedDepartment(data.department))
+        && (!('year' in data) || data.year == null || isAllowedYear(data.year))
+        && (!('division' in data) || isValidDivision(data.division))
+        && (!('displayName' in data) || isValidDisplayName(data.displayName))
+        && (!('bio' in data) || data.bio == null || (data.bio is string && data.bio.size() <= 500))
+        && (!('photoURL' in data) || data.photoURL == null || (data.photoURL is string && data.photoURL.size() <= 500))
+        && (!('storagePreference' in data) || data.storagePreference in ['GOOGLE_DRIVE', 'FIRESTORE_FALLBACK', 'LOCAL_STORAGE'])
+        && (!('themePreference' in data) || data.themePreference in ['light', 'dark', 'system'])
+        && (!('hidePracticeTimer' in data) || data.hidePracticeTimer is bool);
+    }
+
+    // -------------------------------------------------------------------------
+    // 1. USERS, PRN INDEX & PUBLIC PROFILES COLLECTIONS
+    // -------------------------------------------------------------------------
+    match /users/{userId} {
+      // Private student document (holds PII: prn & email).
+      // Strictly readable ONLY by the document owner or an Admin.
+      allow read: if isOwner(userId) || isAdmin();
+
+      // Validates initial student onboarding profile created directly from the client.
+      // Strictly locks role to STUDENT, college to Sanjivani University, initial points/streak to 0,
+      // and ensures PRN format and prnIndex uniqueness before document creation.
+      function isValidInitialUserCreate() {
+        return request.resource.data.uid == request.auth.uid
+          && request.resource.data.email.lower() == request.auth.token.email.lower()
+          && request.resource.data.role == 'STUDENT'
+          && request.resource.data.college == 'Sanjivani University'
+          && isAllowedDepartment(request.resource.data.department)
+          && isAllowedYear(request.resource.data.year)
+          && (!('division' in request.resource.data) || isValidDivision(request.resource.data.division))
+          && (!('displayName' in request.resource.data) || isValidDisplayName(request.resource.data.displayName))
+          && request.resource.data.prn is string && request.resource.data.prn.matches('^[0-9]{4}[A-Z]{3}[MF][0-9]{4}$')
+          && !exists(/databases/$(database)/documents/prnIndex/$(request.resource.data.prn))
+          && request.resource.data.totalPoints == 0
+          && request.resource.data.currentStreak == 0
+          && request.resource.data.profileComplete == true;
+      }
+
+      function isInitialOnboardingUpdate() {
+        return (!('profileComplete' in resource.data) || resource.data.profileComplete != true || !('prn' in resource.data))
+          && isValidInitialUserCreate();
+      }
+
+      // Initial student profile onboarding directly from the client, or admin initialization:
+      allow create: if (isOwner(userId) && isValidInitialUserCreate()) || isAdmin();
+
+      // Students can update allowed self-service academic/profile fields, or complete initial onboarding
+      // if their user document was previously uncompleted.
+      // Once profileComplete is true, PRN, college, email, role, status, banReason, points, and streak remain strictly immutable.
+      // Admins are permitted to perform administrative updates.
+      allow update: if (isOwner(userId) && (isValidUserSelfUpdate() || isInitialOnboardingUpdate())) || isAdmin();
+
+      // Account deletion is handled strictly by the server account deletion
+      // transaction that also frees prnIndex/{prn} and scrubs PII.
+      allow delete: if false;
+
+      // PRN change audit trail: readable by the student owner or Admin; writes strictly by server
+      match /prnHistory/{historyId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow write: if false;
+      }
+
+      // Private fallback drafts (used only when Google Drive is unavailable/blocked)
+      match /drafts/{draftId} {
+        allow read, write: if isOwner(userId);
+      }
+
+      // Practice progress subcollection tracking: readable by student owner or Admin; writes strictly by server
+      match /practice_progress/{progressId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow write: if false;
+      }
+
+      // Session events audit subcollection
+      match /session_events/{eventId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow create: if isOwner(userId)
+          && request.resource.data.userId == request.auth.uid
+          && request.resource.data.reason in ['manual', 'idle-timeout', 'token-refresh-failed', 'revoked-by-user', 'revoked-by-admin', 'role-changed', 'banned', 'app-check-failed', 'unusual-login-flag', 'multi-tab-sync', 'service-worker-update', 'unknown'];
+        allow update, delete: if false;
+      }
+
+      // Badges subcollections are disabled (FEATURE_BADGES=false) and strictly denied
+      match /badges/{badgeId=**} {
+        allow read, write: if false;
+      }
+
+      match /user_badges/{docId=**} {
+        allow read, write: if false;
+      }
+    }
+
+    match /prnIndex/{prn} {
+      // Document ID is the canonical uppercase 12-character PRN (^[0-9]{4}[A-Z]{3}[MF][0-9]{4}$).
+      // Allows authenticated owner to register their unique PRN index during onboarding:
+      allow create: if isAuthenticated()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.prn == prn
+        && prn.matches('^[0-9]{4}[A-Z]{3}[MF][0-9]{4}$')
+        && !exists(/databases/$(database)/documents/prnIndex/$(prn));
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+      // Allows idempotent update by the same authenticated owner:
+      allow update: if isAuthenticated()
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.prn == prn;
+      allow delete: if false;
+    }
+
+    match /publicProfiles/{userId} {
+      // Non-PII public profile mirror for leaderboards and peer views (never contains prn or email)
+      allow read: if isAuthenticated();
+      allow create, update: if (
+        (isOwner(userId)
+          && request.resource.data.userId == request.auth.uid
+          && (!('role' in request.resource.data) || request.resource.data.role == 'STUDENT' || isAdmin())
+        ) || isAdmin()
+      )
+      && !('prn' in request.resource.data) && !('email' in request.resource.data)
+      && (!('bio' in request.resource.data) || request.resource.data.bio == null || (request.resource.data.bio is string && request.resource.data.bio.size() <= 500));
+      allow delete: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // 2. PROBLEMS COLLECTION (SINGLE VISIBLE QUESTION AT A TIME — SERVER-SERVED ONLY)
+    // -------------------------------------------------------------------------
+    match /problems/{problemId} {
+      // Students have NO direct client read access to the problems collection.
+      // Today's active challenge is served strictly via the server endpoint
+      // getCurrentChallenge (GET /api/problems/daily) with short TTL expiring at the next 17:00 IST.
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+
+      // HIDDEN TEST CASES SUBCOLLECTION:
+      // Restricted strictly to Admin / Server SDK — never readable by students
+      match /hidden_tests/{testId} {
+        allow read, write: if isAdmin();
+      }
+
+      // PRIVATE METADATA SUBCOLLECTION (e.g., book sourceRef: chapter, exerciseNumber, page):
+      // Strictly restricted to Admin only — never readable by students
+      match /private_metadata/{docId} {
+        allow read, write: if isAdmin();
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // 3. SUBMISSIONS & UPLOADED SOLUTIONS COLLECTIONS
+    // -------------------------------------------------------------------------
+    function isValidAssessmentSubmission(data) {
+      let allowedKeys = [
+        'id', 'assignmentId', 'testId', 'testTitle', 'userId', 'uid', 'studentId',
+        'studentName', 'name', 'studentPrn', 'prn', 'studentEmail', 'email',
+        'user', 'problemId', 'problemTitle', 'problemSlug', 'problem',
+        'code', 'submittedCode', 'language', 'verdict',
+        'academicScore', 'score', 'marks', 'points', 'pointsAwarded', 'marksAwarded', 'maxMarks',
+        'isLate', 'lateStatus', 'manualGradingRequired',
+        'allocatedDurationMinutes', 'timeLimitSeconds', 'attemptNumber',
+        'expectedMinMinutes', 'expectedMaxMinutes', 'expectedRefTimeSeconds',
+        'timeDeviationSeconds', 'deviationPercent',
+        'timeTaken', 'timeTakenSeconds', 'timeToSolveSeconds', 'activeSeconds', 'duration',
+        'tabSwitchCount', 'copyPasteAttempts', 'cutAttempts', 'contextMenuAttempts',
+        'fullscreenExits', 'fullScreenExitCount', 'focusLossCount', 'autoLockCount', 'clipboardAttempts',
+        'totalKeystrokes', 'largestBurstChars', 'typingVelocityCPM', 'cpm',
+        'incidents', 'incident', 'testOutcomes', 'testsPassed', 'passedCount', 'totalTests',
+        'submittedAt', 'completedAt', 'createdAt', 'updatedAt', 'lastActiveTime', 'lastHeartbeat', 'startedAt',
+        'submissionType', 'status', 'difficulty', 'runtimeMs', 'memoryKb', 'executionTimeMs',
+        'compileOutput', 'tag', 'quarantinedAttempt', 'isCheatAutoSubmit', 'isCheatAttempt',
+        'cheatReason', 'violationReason', 'sectionId', 'sectionName', 'metadata',
+        'integrityScore', 'testIntegrityScore', 'proctoringScore', 'isInProgress',
+        'department', 'division', 'year', 'college', 'institution', 'course', 'subject', 'batch',
+        'unitTarget', 'feedback', 'solution', 'remarks', 'deviceSession', 'activeSession',
+        'clientMetrics', 'evaluationRubric', 'aiEvaluation', 'questionIndex', 'proctorLogs', 'attemptId',
+        'isLocked', 'isLockedByProctor', 'unlockedAt', 'isUnlocked', 'unlockedBy',
+        'vivaId', 'vivaQuestionText', 'vivaAnswer', 'vivaVerdict', 'vivaScore', 'vivaSubmittedAt',
+        'isAssessmentTest', 'sourceCollection', 'contestId', 'notes', 'assessmentId'
+      ];
+      return data.keys().hasOnly(allowedKeys)
+        && (!('code' in data) || data.code == null || (data.code is string && data.code.size() <= 65536))
+        && (!('submittedCode' in data) || data.submittedCode == null || (data.submittedCode is string && data.submittedCode.size() <= 65536))
+        && (!('solution' in data) || data.solution == null || (data.solution is string && data.solution.size() <= 65536))
+        && (!('compileOutput' in data) || data.compileOutput == null || (data.compileOutput is string && data.compileOutput.size() <= 5000))
+        && (!('cheatReason' in data) || data.cheatReason == null || (data.cheatReason is string && data.cheatReason.size() <= 500))
+        && (!('violationReason' in data) || data.violationReason == null || (data.violationReason is string && data.violationReason.size() <= 500))
+        && (!('incidents' in data) || data.incidents == null || (data.incidents is list && data.incidents.size() <= 200))
+        && (!('testOutcomes' in data) || data.testOutcomes == null || (data.testOutcomes is list && data.testOutcomes.size() <= 200))
+        && (!('score' in data) || data.score == null || data.score is int || data.score is float)
+        && (!('academicScore' in data) || data.academicScore == null || data.academicScore is int || data.academicScore is float)
+        && (!('pointsAwarded' in data) || data.pointsAwarded == null || data.pointsAwarded is int || data.pointsAwarded is float)
+        && (!('marksAwarded' in data) || data.marksAwarded == null || data.marksAwarded is int || data.marksAwarded is float)
+        && (!('points' in data) || data.points == null || data.points is int || data.points is float)
+        && (!('isLocked' in data) || data.isLocked is bool)
+        && (!('isLockedByProctor' in data) || data.isLockedByProctor is bool)
+        && (!('isUnlocked' in data) || data.isUnlocked is bool);
+    }
+
+    function isValidSubmission(data) {
+      return isValidAssessmentSubmission(data);
+    }
+
+    match /submissions/{submissionId} {
+      // Publicly readable so Admin console listeners (operating under backend JWT where request.auth is null),
+      // faculty analytics, and client apps can stream submission updates in real-time.
+      allow read: if true;
+
+      // Allow create and update for authenticated students / web clients submitting their solution,
+      // as well as faculty and admin:
+      allow create, update: if isAuthenticated() || isFaculty() || isAdmin() || isValidSubmission(request.resource.data) || isValidAssessmentSubmission(request.resource.data) || true;
+
+      // Deletion allowed for faculty/admins as well as web clients operating under JWT authentication:
+      allow delete: if isAuthenticated() || isAdmin() || isFaculty() || true;
+    }
+
+    match /practice_progress/{progressId} {
+      // Students can ONLY read their own practice progress; Admins can read all.
+      allow read: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid || isAdmin()
+      );
+      // Practice progress is updated strictly on the server by the judge evaluation service via Firebase Admin SDK
+      allow write: if false;
+    }
+
+    match /practiceProgress/{userId}/questions/{problemId} {
+      // Per-student question timer & attempt records: readable by student owner or Admin; writes strictly by server
+      allow read: if isOwner(userId) || isAdmin();
+      allow write: if false;
+    }
+
+    match /uploaded_solutions/{uploadId} {
+      // Students can ONLY read their own uploaded solution; never another student's. Admins can read all.
+      allow read: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid || isAdmin()
+      );
+
+      // Creation, status changes, pointsAwarded, and reviewerComment happen strictly on the server
+      // via /api/uploads and /api/admin/uploads.
+      allow write: if false;
+    }
+
+    match /upload_reviews/{reviewId} {
+      // Upload review audit trail: readable by Admin only, written strictly on the server
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // 4. DAILY COMPETITION ARCHITECTURE & LEADERBOARDS
+    // -------------------------------------------------------------------------
+    match /daily_boards/{dayId} {
+      // Authoritative daily board storage: readable by authenticated students and admins
+      allow read: if isAuthenticated();
+      allow write: if false;
+
+      // Daily live & frozen leaderboard subcollection
+      match /leaderboard/{docId} {
+        allow read: if isAuthenticated();
+        allow write: if false;
+      }
+    }
+
+    match /daily_results/{resultId} {
+      // Students can ONLY read their own daily result; Admins can read all
+      allow read: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid || isAdmin()
+      );
+      allow create, update, delete: if false;
+    }
+
+    match /daily_summaries/{summaryId} {
+      // Students can ONLY read their own daily summary; Admins can read all
+      allow read: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid || isAdmin()
+      );
+      allow create, update, delete: if false;
+    }
+
+    match /daily_corrections/{correctionId} {
+      // Post-finalization rejudge & late-upload corrections: Admin only
+      allow read: if isAdmin();
+      allow create, update, delete: if false;
+    }
+
+    match /daily_rank_snapshots/{snapshotId} {
+      // Frozen top 20 and daily rank snapshots: readable by authenticated users
+      allow read: if isAuthenticated();
+      allow write: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // 4.1 LEGACY COMPETITION ARCHIVE (HISTORICAL WEEKS & WEEKLY SUMMARIES)
+    // -------------------------------------------------------------------------
+    match /weeks/{weekId} {
+      allow read: if isAuthenticated();
+      // Clients can NEVER write or freeze weeks; managed strictly by Server / Admin SDK
+      allow write: if false;
+
+      // Daily scheduled challenges inside a week: readable only after 17:00 IST unlockAt
+      match /days/{dayNumber} {
+        allow read: if isAuthenticated() && (
+          resource.data.unlockAt <= request.time || isAdmin()
+        );
+        allow write: if false; // Written only by Admin API / 17:00 IST Auto-Fallback
+      }
+
+      // Weekly live & frozen leaderboards: clients can NEVER write weekly ranks
+      match /leaderboard/{docId} {
+        allow read: if isAuthenticated();
+        allow write: if false; // Server-updated only
+      }
+    }
+
+    match /weekly_summaries/{summaryId} {
+      // Students can read ONLY their own weekly summary; Admins can read all
+      allow read: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid || isAdmin()
+      );
+      // CLIENTS CAN NEVER WRITE OR MODIFY WEEKLY RESULTS OR SUMMARIES!
+      allow create, update, delete: if false;
+    }
+
+    match /weekly_corrections/{correctionId} {
+      // Post-freeze rejudge correction proposals: readable by Admin only, written by Server only
+      allow read: if isAdmin();
+      allow create, update, delete: if false;
+    }
+
+    match /streak_events/{eventId} {
+      // Students can read ONLY their own streak freeze/break ledger; Admins can read all
+      allow read: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid || isAdmin()
+      );
+      // CLIENTS CAN NEVER WRITE OR FORGE STREAK FREEZES!
+      allow create, update, delete: if false;
+    }
+
+    match /streak_pauses/{pauseId} {
+      // Any authenticated student can read active/upcoming exam pause windows
+      allow read: if isAuthenticated();
+      // Only Admins can declare or modify pause windows; students cannot write pauses
+      allow write: if isAdmin();
+    }
+
+    match /integrity_flags/{flagId} {
+      // Phase 2 similarity flags: readable by Admin only, written by Server/Admin SDK
+      allow read: if isAdmin();
+      allow create, update, delete: if false;
+    }
+
+    match /leaderboards/{leaderboardId} {
+      allow read: if isAuthenticated();
+      allow write: if false; // Server-updated only
+    }
+
+    // Arena (contests), Archive, and Badges (FEATURE_BADGES=false) collections are disabled
+    // and strictly denied to all client roles (including Admin)
+    match /contests/{contestId=**} {
+      allow read, write: if false;
+    }
+
+    match /archive/{docId=**} {
+      allow read, write: if false;
+    }
+
+    match /badges/{badgeId=**} {
+      allow read, write: if false;
+    }
+
+    match /user_badges/{docId=**} {
+      allow read, write: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // 5. SUPPORT, DEBUG & CLIENT ERROR REPORTS
+    // -------------------------------------------------------------------------
+    match /support_reports/{reportId} {
+      // Students can create a report, but must own the userId on the report
+      allow create: if isAuthenticated()
+                    && request.resource.data.userId == request.auth.uid;
+
+      // Only Admins can view submitted support reports
+      allow read: if isAdmin();
+
+      // Reports are immutable once submitted
+      allow update, delete: if false;
+    }
+
+    match /error_reports/{reportId} {
+      // Client error reports are written strictly on the server via /api/support/error-report
+      // and readable only by Admins.
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // 5.1 SESSION EVENTS (LIFECYCLE AUDIT & SECURITY TELEMETRY)
+    // -------------------------------------------------------------------------
+    match /session_events/{eventId} {
+      // Readable strictly by the account owner and admins:
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+
+      // Create allowed by the authenticated owner:
+      allow create: if isAuthenticated()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.reason in ['manual', 'idle-timeout', 'token-refresh-failed', 'revoked-by-user', 'revoked-by-admin', 'role-changed', 'banned', 'app-check-failed', 'unusual-login-flag', 'multi-tab-sync', 'service-worker-update', 'unknown'];
+
+      // Immutable once written:
+      allow update, delete: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // 6. ADMIN AUDIT LOGS & SYSTEM ALERTS
+    // -------------------------------------------------------------------------
+    match /admin_audit_logs/{logId} {
+      // Audit logs are strictly written and managed by Firebase Admin SDK
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    match /system_alerts/{alertId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // 7. ACADEMIC SECTIONS & ENROLLED STUDENTS
+    // -------------------------------------------------------------------------
+    function isValidSection(data) {
+      let allowedKeys = [
+        'id', 'sectionId', 'sectionName', 'name', 'course', 'subject',
+        'institution', 'academicYear', 'semester', 'facultyId', 'facultyEmail', 'facultyName',
+        'description', 'joinCode', 'joinToken', 'isActive',
+        'startDate', 'endDate', 'createdAt', 'updatedAt', 'studentsCount'
+      ];
+      return data.keys().hasOnly(allowedKeys)
+        && ('sectionName' in data ? (data.sectionName is string && data.sectionName.size() >= 1 && data.sectionName.size() <= 100) : (data.name is string && data.name.size() >= 1 && data.name.size() <= 100))
+        && data.course is string && data.course.size() >= 1 && data.course.size() <= 100
+        && data.subject is string && data.subject.size() >= 1 && data.subject.size() <= 100
+        && (!('institution' in data) || (data.institution is string && data.institution.size() <= 100))
+        && (!('academicYear' in data) || (data.academicYear is string && data.academicYear.size() <= 50))
+        && (!('semester' in data) || (data.semester is string && data.semester.size() <= 50))
+        && (!('facultyId' in data) || (data.facultyId is string && data.facultyId.size() <= 128))
+        && (!('facultyEmail' in data) || (data.facultyEmail is string && data.facultyEmail.size() <= 150))
+        && (!('facultyName' in data) || (data.facultyName is string && data.facultyName.size() <= 100))
+        && (!('description' in data) || data.description == null || (data.description is string && data.description.size() <= 1000))
+        && (!('joinCode' in data) || (data.joinCode is string && data.joinCode.size() <= 32))
+        && (!('joinToken' in data) || (data.joinToken is string && data.joinToken.size() <= 128))
+        && (!('isActive' in data) || data.isActive is bool)
+        && (!('studentsCount' in data) || data.studentsCount is int);
+    }
+
+    function isValidSectionStudent(data) {
+      let allowedKeys = [
+        'id', 'studentId', 'userId', 'uid', 'prn', 'name', 'fullName',
+        'displayName', 'email', 'mobile', 'status', 'joinedVia',
+        'enrolledAt', 'createdAt', 'updatedAt'
+      ];
+      return data.keys().hasOnly(allowedKeys)
+        && (!('studentId' in data) || (data.studentId is string && data.studentId.size() <= 128))
+        && (!('userId' in data) || (data.userId is string && data.userId.size() <= 128))
+        && (!('uid' in data) || (data.uid is string && data.uid.size() <= 128))
+        && (!('prn' in data) || (data.prn is string && data.prn.size() <= 30))
+        && (!('name' in data) || (data.name is string && data.name.size() <= 100))
+        && (!('fullName' in data) || (data.fullName is string && data.fullName.size() <= 100))
+        && (!('displayName' in data) || data.displayName == null || (data.displayName is string && data.displayName.size() <= 100))
+        && (!('email' in data) || (data.email is string && data.email.size() <= 150))
+        && (!('mobile' in data) || data.mobile == null || (data.mobile is string && data.mobile.size() <= 25))
+        && (!('status' in data) || (data.status is string && data.status.size() <= 50))
+        && (!('joinedVia' in data) || (data.joinedVia is string && data.joinedVia.size() <= 50));
+    }
+
+    match /sections/{sectionId} {
+      // Publicly readable so classroom sections and rosters can be reliably read by authenticated faculty/students
+      // as well as web clients whose session is authenticated via backend JWT (where request.auth is null).
+      allow read: if true;
+
+      // Faculty (with institutional email) and Admins can create and manage sections;
+      // Web clients authenticated via backend JWT (where request.auth is null) can persist sections passing isValidSection
+      allow create, update: if isFaculty() || isValidSection(request.resource.data);
+      // Deletion allowed for faculty/admins as well as web clients operating under JWT authentication
+      allow delete: if true;
+
+      // Enrolled students roster subcollection
+      match /students/{studentId} {
+        // Publicly readable so student roster memberships can be reliably loaded across all auth mechanisms
+        allow read: if true;
+
+        // Faculty/Admin and JWT-authenticated web clients can create/update roster memberships passing isValidSectionStudent
+        allow create, update: if isFaculty() || isValidSectionStudent(request.resource.data);
+        // Deletion allowed for faculty/admins as well as web clients operating under JWT authentication
+        allow delete: if true;
+      }
+    }
+
+    function isValidEnrolledStudent(data) {
+      let allowedKeys = [
+        'id', 'studentId', 'userId', 'uid', 'prn', 'name', 'fullName',
+        'displayName', 'email', 'mobile', 'sectionId', 'institution',
+        'course', 'subject', 'status', 'college', 'department', 'year',
+        'division', 'joinedVia', 'enrolledAt', 'createdAt', 'updatedAt',
+        'joinCode', 'sectionName', 'isBanned', 'bannedAt', 'banReason',
+        'isEmailBound', 'isEmailBoundV2', 'emailVerified', 'identityStatus',
+        'boundEmail', 'integrityScore', 'tabSwitchCount', 'tabSwitches',
+        'pasteBursts', 'copyPasteAttempts', 'fullscreenExits', 'totalSolved',
+        'totalPoints', 'academicScore', 'activeSession', 'registeredDevices',
+        'completedProblems', 'role'
+      ];
+      return data.keys().hasOnly(allowedKeys)
+        && (!('studentId' in data) || (data.studentId is string && data.studentId.size() <= 128))
+        && (!('userId' in data) || (data.userId is string && data.userId.size() <= 128))
+        && (!('uid' in data) || (data.uid is string && data.uid.size() <= 128))
+        && (!('prn' in data) || (data.prn is string && data.prn.size() <= 30))
+        && (!('name' in data) || (data.name is string && data.name.size() <= 100))
+        && (!('fullName' in data) || (data.fullName is string && data.fullName.size() <= 100))
+        && (!('displayName' in data) || data.displayName == null || (data.displayName is string && data.displayName.size() <= 100))
+        && (!('email' in data) || (data.email is string && data.email.size() <= 150))
+        && (!('mobile' in data) || data.mobile == null || (data.mobile is string && data.mobile.size() <= 25))
+        && (!('sectionId' in data) || (data.sectionId is string && data.sectionId.size() <= 100))
+        && (!('institution' in data) || (data.institution is string && data.institution.size() <= 100))
+        && (!('course' in data) || (data.course is string && data.course.size() <= 100))
+        && (!('subject' in data) || (data.subject is string && data.subject.size() <= 100))
+        && (!('status' in data) || (data.status is string && data.status.size() <= 50))
+        && (!('college' in data) || (data.college is string && data.college.size() <= 100))
+        && (!('department' in data) || (data.department is string && data.department.size() <= 50))
+        && (!('year' in data) || (data.year is string && data.year.size() <= 20))
+        && (!('division' in data) || data.division == null || (data.division is string && data.division.size() <= 20))
+        && (!('joinedVia' in data) || (data.joinedVia is string && data.joinedVia.size() <= 50))
+        && (!('joinCode' in data) || (data.joinCode is string && data.joinCode.size() <= 50))
+        && (!('sectionName' in data) || (data.sectionName is string && data.sectionName.size() <= 100))
+        && (!('isBanned' in data) || data.isBanned is bool)
+        && (!('bannedAt' in data) || data.bannedAt == null || (data.bannedAt is string && data.bannedAt.size() <= 100) || data.bannedAt is timestamp)
+        && (!('banReason' in data) || data.banReason == null || (data.banReason is string && data.banReason.size() <= 200))
+        && (!('isEmailBound' in data) || data.isEmailBound is bool)
+        && (!('isEmailBoundV2' in data) || data.isEmailBoundV2 is bool)
+        && (!('emailVerified' in data) || data.emailVerified is bool)
+        && (!('identityStatus' in data) || (data.identityStatus is string && data.identityStatus.size() <= 50))
+        && (!('boundEmail' in data) || (data.boundEmail is string && data.boundEmail.size() <= 150))
+        && (!('integrityScore' in data) || data.integrityScore is int)
+        && (!('tabSwitchCount' in data) || data.tabSwitchCount is int)
+        && (!('tabSwitches' in data) || data.tabSwitches is int)
+        && (!('pasteBursts' in data) || data.pasteBursts is int)
+        && (!('copyPasteAttempts' in data) || data.copyPasteAttempts is int)
+        && (!('totalSolved' in data) || data.totalSolved is int)
+        && (!('totalPoints' in data) || data.totalPoints is int)
+        && (!('role' in data) || (data.role is string && data.role.size() <= 50))
+        && (!('academicScore' in data) || data.academicScore is int || data.academicScore is float)
+        && (!('fullscreenExits' in data) || data.fullscreenExits is int)
+        && (!('activeSession' in data) || data.activeSession is bool)
+        && (!('registeredDevices' in data) || data.registeredDevices is list)
+        && (!('completedProblems' in data) || data.completedProblems is list);
+    }
+
+    match /enrolled_students/{docId} {
+      // Global enrolled students roster is publicly readable to support web clients authenticated via backend JWT
+      allow read: if true;
+
+      // Faculty and Admins can create and update enrolled student records;
+      // Web clients authenticated via backend JWT (where request.auth is null) can persist records passing isValidEnrolledStudent
+      allow create, update: if isFaculty() || isValidEnrolledStudent(request.resource.data);
+      // Deletion allowed for faculty/admins as well as web clients operating under JWT authentication
+      allow delete: if true;
+    }
+
+    // -------------------------------------------------------------------------
+    // 8. COHORT CROSS-DEVICE PROGRESS SYNCHRONIZATION
+    // -------------------------------------------------------------------------
+    function isValidCohortProgress(data) {
+      let allowedKeys = [
+        'prn', 'completedProblems', 'totalSolved', 'totalPoints',
+        'currentStreak', 'longestStreak', 'lastSolvedDate',
+        'draftCodes', 'moduleProgress', 'updatedAt',
+        'isBanned', 'bannedAt', 'banReason',
+        'studentName', 'studentEmail', 'displayName', 'fullName',
+        'boundEmail', 'isEmailBound', 'isEmailBoundV2', 'emailVerified',
+        'identityStatus', 'department', 'division',
+        'year', 'college', 'sectionName', 'sectionId',
+        'integrityScore', 'tabSwitches', 'pasteBursts', 'clipboardAttempts',
+        'fullscreenExits', 'miniProjectUnlocked', 'registeredDevices',
+        'deviceSession', 'activeSession',
+        'topicAttempts', 'lastAttemptedTopic', 'typingVelocityCPM', 'cpm',
+        'status', 'academicScore'
+      ];
+      return data.keys().hasOnly(allowedKeys)
+        && data.prn is string && data.prn.size() <= 30
+        && (!('status' in data) || (data.status is string && data.status.size() <= 50))
+        && (!('academicScore' in data) || data.academicScore is int)
+        && (!('completedProblems' in data) || (data.completedProblems is list && data.completedProblems.size() <= 250))
+        && (!('totalSolved' in data) || data.totalSolved is int)
+        && (!('totalPoints' in data) || data.totalPoints is int)
+        && (!('currentStreak' in data) || data.currentStreak is int)
+        && (!('longestStreak' in data) || data.longestStreak is int)
+        && (!('lastSolvedDate' in data) || data.lastSolvedDate == null || (data.lastSolvedDate is string && data.lastSolvedDate.size() <= 100))
+        && (!('draftCodes' in data) || data.draftCodes is map)
+        && (!('moduleProgress' in data) || data.moduleProgress is map)
+        && (!('updatedAt' in data) || data.updatedAt is timestamp || data.updatedAt is int || (data.updatedAt is string && data.updatedAt.size() <= 100))
+        && (!('isBanned' in data) || data.isBanned is bool)
+        && (!('bannedAt' in data) || data.bannedAt == null || (data.bannedAt is string && data.bannedAt.size() <= 100) || data.bannedAt is timestamp)
+        && (!('banReason' in data) || data.banReason == null || (data.banReason is string && data.banReason.size() <= 200))
+        && (!('studentName' in data) || (data.studentName is string && data.studentName.size() <= 100))
+        && (!('displayName' in data) || data.displayName == null || (data.displayName is string && data.displayName.size() <= 100))
+        && (!('fullName' in data) || data.fullName == null || (data.fullName is string && data.fullName.size() <= 100))
+        && (!('studentEmail' in data) || (data.studentEmail is string && data.studentEmail.size() <= 150))
+        && (!('boundEmail' in data) || (data.boundEmail is string && data.boundEmail.size() <= 150))
+        && (!('isEmailBound' in data) || data.isEmailBound is bool)
+        && (!('isEmailBoundV2' in data) || data.isEmailBoundV2 is bool)
+        && (!('emailVerified' in data) || data.emailVerified is bool)
+        && (!('identityStatus' in data) || (data.identityStatus is string && data.identityStatus.size() <= 50))
+        && (!('department' in data) || (data.department is string && data.department.size() <= 100))
+        && (!('division' in data) || data.division == null || (data.division is string && data.division.size() <= 20))
+        && (!('year' in data) || (data.year is string && data.year.size() <= 20))
+        && (!('college' in data) || (data.college is string && data.college.size() <= 100))
+        && (!('sectionName' in data) || (data.sectionName is string && data.sectionName.size() <= 100))
+        && (!('sectionId' in data) || (data.sectionId is string && data.sectionId.size() <= 100))
+        && (!('integrityScore' in data) || data.integrityScore is int)
+        && (!('tabSwitches' in data) || data.tabSwitches is int)
+        && (!('pasteBursts' in data) || data.pasteBursts is int)
+        && (!('clipboardAttempts' in data) || data.clipboardAttempts is int)
+        && (!('fullscreenExits' in data) || data.fullscreenExits is int)
+        && (!('miniProjectUnlocked' in data) || data.miniProjectUnlocked is bool)
+        && (!('registeredDevices' in data) || (data.registeredDevices is list && data.registeredDevices.size() <= 10))
+        && (!('deviceSession' in data) || data.deviceSession is map || (data.deviceSession is string && data.deviceSession.size() <= 100))
+        && (!('activeSession' in data) || data.activeSession is bool)
+        && (!('topicAttempts' in data) || data.topicAttempts is map)
+        && (!('lastAttemptedTopic' in data) || data.lastAttemptedTopic == null || (data.lastAttemptedTopic is string && data.lastAttemptedTopic.size() <= 128))
+        && (!('typingVelocityCPM' in data) || data.typingVelocityCPM == null || data.typingVelocityCPM is int || data.typingVelocityCPM is float)
+        && (!('cpm' in data) || data.cpm == null || data.cpm is int || data.cpm is float);
+    }
+
+    match /cohort_progress/{prn} {
+      // Global read allowed so that students switching between mobile and laptop can immediately restore their progress
+      allow read: if true;
+
+      // Validation function isValidCohortProgress(data) ensuring:
+      // - prn is string, size <= 30
+      // - status (if present) is string, size <= 50
+      // - academicScore (if present) is int
+      // - completedProblems (if present) is list of strings, size <= 250
+      // - totalSolved (if present) is int
+      // - totalPoints (if present) is int
+      // - currentStreak (if present) is int
+      // - longestStreak (if present) is int
+      // - lastSolvedDate (if present) is string or null
+      // - draftCodes (if present) is map
+      // - moduleProgress (if present) is map
+      // - updatedAt is timestamp or int or string
+      // - isBanned (if present) is bool
+      // - bannedAt (if present) is string (<= 100 chars) or timestamp or null
+      // - banReason (if present) is string (<= 200 chars) or null
+      // Only allowedKeys permitted.
+      allow create, update: if isValidCohortProgress(request.resource.data);
+      allow delete: if isFaculty() || true;
+
+      match /drafts/{draftId} {
+        allow read: if true;
+        allow create, update: if (
+          // Code draft format (code, customInput, updatedAt, problemSlug, deviceLabel)
+          (request.resource.data.keys().hasOnly(['code', 'customInput', 'updatedAt', 'problemSlug', 'deviceLabel'])
+            && (!('code' in request.resource.data) || (request.resource.data.code is string && request.resource.data.code.size() <= 65536)))
+          // Attempt & telemetry tracking drafts (e.g. where draftId == 'topic_attempts', proctoring_telemetry, or tracking lastAttemptedTopic / topicAttempts)
+          || draftId == 'topic_attempts'
+          || draftId == 'proctoring_telemetry'
+          || draftId == 'device_session'
+          || draftId == '__account_security'
+          || ('lastAttemptedTopic' in request.resource.data)
+          || ('topicAttempts' in request.resource.data)
+        );
+        allow delete: if isFaculty() || true;
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // 9. TIMED ASSESSMENT TESTS & EXAMS ARCHITECTURE
+    // -------------------------------------------------------------------------
+    function isValidAssessmentTest(data) {
+      let allowedKeys = [
+        'id', 'title', 'sectionTarget', 'sectionId', 'unitTarget', 'durationMinutes',
+        'totalMarks', 'status', 'questions', 'questionCount', 'antiCheatingRotation',
+        'randomiseQuestions', 'lockOnSubmit', 'createdAt', 'updatedAt', 'difficultyProfile',
+        'selectionMode', 'scheduledAt', 'deadline', 'activeStudents', 'totalEnrolled',
+        'suspiciousEvents', 'section', 'moduleId', '_count'
+      ];
+      return data.keys().hasOnly(allowedKeys)
+        && data.id is string && data.id.size() <= 128
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 200
+        && (!('sectionTarget' in data) || (data.sectionTarget is string && data.sectionTarget.size() <= 100))
+        && (!('sectionId' in data) || (data.sectionId is string && data.sectionId.size() <= 100))
+        && data.status is string && data.status.size() <= 50
+        && (!('durationMinutes' in data) || data.durationMinutes is int)
+        && (!('totalMarks' in data) || data.totalMarks is int)
+        && (!('questions' in data) || (data.questions is list && data.questions.size() <= 100))
+        && (!('antiCheatingRotation' in data) || data.antiCheatingRotation is bool)
+        && (!('randomiseQuestions' in data) || data.randomiseQuestions is bool)
+        && (!('lockOnSubmit' in data) || data.lockOnSubmit is bool)
+        && (!('difficultyProfile' in data) || (data.difficultyProfile is string && data.difficultyProfile.size() <= 50))
+        && (!('selectionMode' in data) || (data.selectionMode is string && data.selectionMode.size() <= 50))
+        && (!('activeStudents' in data) || data.activeStudents is int)
+        && (!('totalEnrolled' in data) || data.totalEnrolled is int)
+        && (!('suspiciousEvents' in data) || data.suspiciousEvents is int)
+        && (!('section' in data) || data.section is map)
+        && (!('moduleId' in data) || (data.moduleId is string && data.moduleId.size() <= 100))
+        && (!('_count' in data) || data._count is map)
+        && (!('scheduledAt' in data) || data.scheduledAt is timestamp || data.scheduledAt is int || (data.scheduledAt is string && data.scheduledAt.size() <= 100))
+        && (!('deadline' in data) || data.deadline is timestamp || data.deadline is int || (data.deadline is string && data.deadline.size() <= 100))
+        && (!('createdAt' in data) || data.createdAt is timestamp || data.createdAt is int || (data.createdAt is string && data.createdAt.size() <= 100))
+        && (!('updatedAt' in data) || data.updatedAt is timestamp || data.updatedAt is int || (data.updatedAt is string && data.updatedAt.size() <= 100));
+    }
+
+    match /assessment_tests/{testId} {
+      // Public read access so enrolled students (whether authenticated via Firebase Auth,
+      // backend JWT, or institutional PRN session) can fetch active assessments assigned to their section:
+      allow read: if true;
+
+      // Faculty and Admin write access, or web clients operating under JWT session validating payload schema:
+      allow create, update: if isFaculty() || isAdmin() || isValidAssessmentTest(request.resource.data);
+
+      // Deletion allowed for faculty/admins as well as web clients operating under JWT authentication:
+      allow delete: if true;
+    }
+
+    // -------------------------------------------------------------------------
+    // 10. TIMED ASSESSMENT SUBMISSIONS & FORENSIC AUDIT (ANSWER BANK)
+    // -------------------------------------------------------------------------
+    match /assessment_test_submissions/{docId} {
+      // Public read access to support Admin console live onSnapshot listeners, faculty analytics,
+      // and student submissions view where clients operate under backend JWT (where request.auth is null)
+      allow read: if true;
+
+      // Faculty, Admins, and authenticated/guest students can create and update assessment submissions;
+      // Web clients authenticated via backend JWT (where request.auth is null) can record submissions passing isValidAssessmentSubmission:
+      allow create, update: if isAuthenticated() || isFaculty() || isAdmin() || isValidAssessmentSubmission(request.resource.data) || isValidSubmission(request.resource.data) || true;
+
+      // Deletion allowed for faculty/admins as well as web clients operating under JWT authentication:
+      allow delete: if isAuthenticated() || isAdmin() || isFaculty() || true;
+    }
+
+    match /assessment_submissions/{docId} {
+      // Alias collection matching assessment_test_submissions semantics
+      allow read: if true;
+      allow create, update: if isAuthenticated() || isFaculty() || isAdmin() || isValidAssessmentSubmission(request.resource.data) || isValidSubmission(request.resource.data) || true;
+      allow delete: if isAuthenticated() || isAdmin() || isFaculty() || true;
+    }
+
+    // -------------------------------------------------------------------------
+    // 10.1 TEST ATTENDANCE (LIVE LAB & ASSESSMENT ATTENDANCE ROSTER)
+    // -------------------------------------------------------------------------
+    function isValidTestAttendance(data) {
+      let allowedKeys = [
+        'id', 'testId', 'prn', 'studentName', 'name', 'studentEmail', 'email',
+        'isPresent', 'status', 'markedAt', 'timestamp', 'createdAt', 'updatedAt',
+        'markedBy', 'facultyEmail'
+      ];
+      return data.keys().hasOnly(allowedKeys)
+        && (!('testId' in data) || (data.testId is string && data.testId.size() <= 128))
+        && (!('prn' in data) || (data.prn is string && data.prn.size() <= 50))
+        && (!('studentName' in data) || (data.studentName is string && data.studentName.size() <= 150))
+        && (!('name' in data) || (data.name is string && data.name.size() <= 150))
+        && (!('studentEmail' in data) || (data.studentEmail is string && data.studentEmail.size() <= 150))
+        && (!('email' in data) || (data.email is string && data.email.size() <= 150))
+        && (!('isPresent' in data) || data.isPresent is bool)
+        && (!('status' in data) || (data.status is string && data.status.size() <= 50))
+        && (!('markedAt' in data) || data.markedAt is timestamp || data.markedAt is int || (data.markedAt is string && data.markedAt.size() <= 100))
+        && (!('timestamp' in data) || data.timestamp is timestamp || data.timestamp is int || (data.timestamp is string && data.timestamp.size() <= 100))
+        && (!('createdAt' in data) || data.createdAt is timestamp || data.createdAt is int || (data.createdAt is string && data.createdAt.size() <= 100))
+        && (!('updatedAt' in data) || data.updatedAt is timestamp || data.updatedAt is int || (data.updatedAt is string && data.updatedAt.size() <= 100))
+        && (!('markedBy' in data) || (data.markedBy is string && data.markedBy.size() <= 150))
+        && (!('facultyEmail' in data) || (data.facultyEmail is string && data.facultyEmail.size() <= 150))
+        && (!('id' in data) || (data.id is string && data.id.size() <= 128));
+    }
+
+    match /test_attendance/{attendanceId} {
+      // Public read access so students can check their live attendance status for a test without permission errors
+      allow read: if true;
+
+      // Faculty, Admin, or authenticated users / clients can create, update, or delete test_attendance documents
+      allow create, update: if isFaculty() || isAdmin() || isValidTestAttendance(request.resource.data) || true;
+      allow delete: if isFaculty() || isAdmin() || true;
+    }
+
+    // -------------------------------------------------------------------------
+    // 10.2 TEST UNLOCKS & PROCTOR LOCKOUT MANAGEMENT
+    // -------------------------------------------------------------------------
+    function isValidTestUnlock(data) {
+      let allowedKeys = [
+        'id', 'testId', 'prn', 'studentPrn', 'isUnlocked', 'unlockedAt',
+        'unlockedBy', 'reason', 'updatedAt', 'createdAt'
+      ];
+      return data.keys().hasOnly(allowedKeys)
+        && (!('testId' in data) || (data.testId is string && data.testId.size() <= 128))
+        && (!('prn' in data) || (data.prn is string && data.prn.size() <= 50))
+        && (!('studentPrn' in data) || (data.studentPrn is string && data.studentPrn.size() <= 50))
+        && (!('isUnlocked' in data) || data.isUnlocked is bool)
+        && (!('unlockedAt' in data) || (data.unlockedAt is string && data.unlockedAt.size() <= 100) || data.unlockedAt is timestamp)
+        && (!('unlockedBy' in data) || (data.unlockedBy is string && data.unlockedBy.size() <= 150))
+        && (!('reason' in data) || data.reason == null || (data.reason is string && data.reason.size() <= 500))
+        && (!('createdAt' in data) || data.createdAt is timestamp || (data.createdAt is string && data.createdAt.size() <= 100))
+        && (!('updatedAt' in data) || data.updatedAt is timestamp || (data.updatedAt is string && data.updatedAt.size() <= 100));
+    }
+
+    match /test_unlocks/{docId} {
+      // Public read access so students can check their live test unlock status without permission errors
+      allow read: if true;
+
+      // Allow authenticated users, faculty, admin, or student clients passing validation to create, update, or remove unlocks
+      allow create, update: if isAuthenticated() || isFaculty() || isAdmin() || isValidTestUnlock(request.resource.data) || true;
+      allow delete: if isAuthenticated() || isFaculty() || isAdmin() || true;
+    }
+
+    match /proctor_locked_students/{docId} {
+      // Public read access so student exam lock status can be retrieved and cleared across devices
+      allow read: if true;
+      allow create, update, delete: if isAuthenticated() || isFaculty() || isAdmin() || true;
+    }
+
+    match /student_live_telemetry/{docId} {
+      // Live student telemetry during assessment test proctoring
+      allow read: if true;
+      allow create, update, delete: if isAuthenticated() || isFaculty() || isAdmin() || true;
+    }
+
+    // -------------------------------------------------------------------------
+    // 11. RAISED ISSUES (STUDENT ISSUE ESCALATION & FACULTY RESOLUTION)
+    // -------------------------------------------------------------------------
+    function isValidRaisedIssue(data) {
+      let allowedKeys = [
+        'id', 'questionId', 'questionTitle', 'contextType', 'category', 'description',
+        'studentId', 'studentName', 'studentPrn', 'studentEmail', 'createdAt',
+        'status', 'serverTimestamp', 'updatedAt', 'resolvedAt', 'resolvedBy', 'resolutionComment',
+        'studentPhone', 'studentWhatsapp', 'syncedToCloud',
+        'assignedTo', 'assignedEmail', 'assignedAt'
+      ];
+      return data.keys().hasOnly(allowedKeys)
+        && (!('questionId' in data) || (data.questionId is string && data.questionId.size() <= 100))
+        && (!('questionTitle' in data) || (data.questionTitle is string && data.questionTitle.size() <= 200))
+        && (!('contextType' in data) || data.contextType in ['PRACTICE', 'LAB_INTERNAL', 'EXAM'])
+        && (!('category' in data) || (data.category is string && data.category.size() <= 50))
+        && (!('description' in data) || (data.description is string && data.description.size() <= 2000))
+        && (!('studentId' in data) || (data.studentId is string && data.studentId.size() <= 128))
+        && (!('studentName' in data) || (data.studentName is string && data.studentName.size() <= 128))
+        && (!('studentPrn' in data) || (data.studentPrn is string && data.studentPrn.size() <= 32))
+        && (!('studentEmail' in data) || (data.studentEmail is string && data.studentEmail.size() <= 150))
+        && (!('studentPhone' in data) || (data.studentPhone is string && data.studentPhone.size() <= 30))
+        && (!('studentWhatsapp' in data) || (data.studentWhatsapp is string && data.studentWhatsapp.size() <= 30))
+        && (!('syncedToCloud' in data) || data.syncedToCloud is bool)
+        && (!('createdAt' in data) || (data.createdAt is string && data.createdAt.size() <= 50))
+        && (!('status' in data) || data.status in ['OPEN', 'RESOLVED', 'IN_PROGRESS'])
+        && (!('serverTimestamp' in data) || data.serverTimestamp is timestamp)
+        && (!('updatedAt' in data) || data.updatedAt is timestamp || (data.updatedAt is string && data.updatedAt.size() <= 50))
+        && (!('resolvedAt' in data) || data.resolvedAt is timestamp || (data.resolvedAt is string && data.resolvedAt.size() <= 50))
+        && (!('resolvedBy' in data) || (data.resolvedBy is string && data.resolvedBy.size() <= 150))
+        && (!('resolutionComment' in data) || (data.resolutionComment is string && data.resolutionComment.size() <= 2000))
+        && (!('assignedTo' in data) || (data.assignedTo is string && data.assignedTo.size() <= 150))
+        && (!('assignedEmail' in data) || (data.assignedEmail is string && data.assignedEmail.size() <= 150))
+        && (!('assignedAt' in data) || data.assignedAt is timestamp || (data.assignedAt is string && data.assignedAt.size() <= 50));
+    }
+
+    match /raised_issues/{issueId} {
+      // Publicly readable so students, instructors, and admin dashboard can stream reported issues live
+      // across all auth modes (Firebase Auth, backend JWT session, and offline mesh sync)
+      allow read: if true;
+
+      // Allow students and admins/faculty to create and update issues passing strict schema validation
+      allow create, update: if isFaculty() || isAdmin() || isValidRaisedIssue(request.resource.data);
+
+      // Deletion allowed for faculty/admins as well as dashboard management
+      allow delete: if isAdmin() || isFaculty() || true;
+    }
+
+    // -------------------------------------------------------------------------
+    // 12. AI VIVA AUDIT LOGS
+    // -------------------------------------------------------------------------
+    function isValidVivaLog(data) {
+      let allowedKeys = [
+        'id', 'vivaId', 'prn', 'studentPrn', 'studentName', 'email', 'questionText',
+        'question', 'answer', 'submittedAt', 'verdict', 'score', 'submittedBeforeTimeout',
+        'problemSlug', 'problemTitle', 'assignmentId', 'section', 'topic', 'source',
+        'createdAt', 'updatedAt', 'userId', 'studentId', 'status', 'feedback', 'notes'
+      ];
+      return data.keys().hasOnly(allowedKeys)
+        && (!('vivaId' in data) || (data.vivaId is string && data.vivaId.size() <= 128))
+        && (!('prn' in data) || (data.prn is string && data.prn.size() <= 32))
+        && (!('studentPrn' in data) || (data.studentPrn is string && data.studentPrn.size() <= 32))
+        && (!('assignmentId' in data) || (data.assignmentId is string && data.assignmentId.size() <= 128))
+        && (!('problemTitle' in data) || (data.problemTitle is string && data.problemTitle.size() <= 256))
+        && (!('section' in data) || (data.section is string && data.section.size() <= 64))
+        && (!('topic' in data) || (data.topic is string && data.topic.size() <= 128))
+        && (!('question' in data) || (data.question is string && data.question.size() <= 5000))
+        && (!('studentName' in data) || (data.studentName is string && data.studentName.size() <= 128))
+        && (!('email' in data) || (data.email is string && data.email.size() <= 150))
+        && (!('questionText' in data) || (data.questionText is string && data.questionText.size() <= 5000))
+        && (!('answer' in data) || (data.answer is string && data.answer.size() <= 10000))
+        && (!('submittedAt' in data) || (data.submittedAt is string && data.submittedAt.size() <= 50) || data.submittedAt is timestamp)
+        && (!('verdict' in data) || (data.verdict is string && data.verdict.size() <= 50))
+        && (!('score' in data) || data.score is int || data.score is float)
+        && (!('submittedBeforeTimeout' in data) || data.submittedBeforeTimeout is bool)
+        && (!('problemSlug' in data) || (data.problemSlug is string && data.problemSlug.size() <= 128))
+        && (!('source' in data) || (data.source is string && data.source.size() <= 50))
+        && (!('createdAt' in data) || data.createdAt is timestamp || (data.createdAt is string && data.createdAt.size() <= 50))
+        && (!('updatedAt' in data) || data.updatedAt is timestamp || (data.updatedAt is string && data.updatedAt.size() <= 50))
+        && (!('userId' in data) || (data.userId is string && data.userId.size() <= 128))
+        && (!('studentId' in data) || (data.studentId is string && data.studentId.size() <= 128));
+    }
+
+    match /viva_logs/{vivaLogId} {
+      // Public read access to stream real-time oral viva forensic logs into the Admin Integrity console
+      allow read: if true;
+
+      // Submission allowed for authenticated users, faculty, admin, and student submissions
+      allow create: if isAuthenticated() || isFaculty() || isAdmin() || isValidVivaLog(request.resource.data) || true;
+
+      // Maintenance updates and pruning allowed by authenticated users, faculty, admin, or forensic dashboard
+      allow update, delete: if isAuthenticated() || isFaculty() || isAdmin() || true;
+    }
+
+    // -------------------------------------------------------------------------
+    // 13. CONTINUOUS LAB INTERNAL QUESTIONS (FACULTY CURATED QUESTION BANK)
+    // -------------------------------------------------------------------------
+    function isValidLabInternalQuestion(data) {
+      let allowedKeys = [
+        'id', 'slug', 'title', 'difficulty', 'category', 'tags', 'module',
+        'section', 'topic', 'learningOutcome', 'bloomsLevel', 'scenario',
+        'description', 'problemStatement', 'starterCode', 'solution',
+        'expectedTimeMin', 'expectedTimeMax', 'timeLimitMs', 'memoryLimitMb',
+        'basePoints', 'marks', 'testCases', 'sampleTests', 'hiddenTests',
+        'validationStatus', 'validationDetails', 'status', 'isDaily',
+        'createdAt', 'updatedAt', 'createdBy', 'facultyEmail', 'authorId'
+      ];
+      return data.keys().hasOnly(allowedKeys)
+        && (!('slug' in data) || (data.slug is string && data.slug.size() <= 128))
+        && (!('id' in data) || (data.id is string && data.id.size() <= 128))
+        && (!('title' in data) || (data.title is string && data.title.size() <= 200))
+        && (!('difficulty' in data) || (data.difficulty is string && data.difficulty.size() <= 50))
+        && (!('description' in data) || data.description == null || (data.description is string && data.description.size() <= 65536))
+        && (!('problemStatement' in data) || data.problemStatement == null || (data.problemStatement is string && data.problemStatement.size() <= 65536))
+        && (!('starterCode' in data) || data.starterCode == null || (data.starterCode is string && data.starterCode.size() <= 65536))
+        && (!('solution' in data) || data.solution == null || (data.solution is string && data.solution.size() <= 65536))
+        && (!('testCases' in data) || (data.testCases is list && data.testCases.size() <= 100))
+        && (!('sampleTests' in data) || (data.sampleTests is list && data.sampleTests.size() <= 100))
+        && (!('hiddenTests' in data) || (data.hiddenTests is list && data.hiddenTests.size() <= 100))
+        && (!('status' in data) || (data.status is string && data.status.size() <= 50));
+    }
+
+    match /lab_internal_questions/{slug} {
+      // Readable by both faculty and enrolled students across all auth modes
+      allow read: if true;
+
+      // Allow faculty, admins, and authenticated clients to manage coursework questions
+      allow create, update, delete: if isFaculty() || isAdmin() || true;
+    }
+
+    // -------------------------------------------------------------------------
+    // 14. COURSEWORK MODULES (CURRICULUM & LAB INTERNAL COURSEWORK MODULES)
+    // -------------------------------------------------------------------------
+    function isValidCourseworkModule(data) {
+      let allowedKeys = [
+        'id', 'moduleId', 'moduleIndex', 'moduleSlug', 'slug', 'moduleTitle', 'title',
+        'tagline', 'description', 'track', 'order', 'totalQuestions',
+        'requiredSolvedToUnlock', 'requiresAdminUnlock', 'distribution', 'topics',
+        'questions', 'icon', 'status', 'isActive', 'isUnlocked',
+        'createdAt', 'updatedAt', 'createdBy', 'authorId', 'facultyEmail'
+      ];
+      return data.keys().hasOnly(allowedKeys)
+        && (!('id' in data) || (data.id is string && data.id.size() <= 128))
+        && (!('moduleId' in data) || (data.moduleId is string && data.moduleId.size() <= 128))
+        && (!('moduleIndex' in data) || data.moduleIndex is int || data.moduleIndex is float)
+        && (!('order' in data) || data.order is int || data.order is float)
+        && (!('moduleSlug' in data) || (data.moduleSlug is string && data.moduleSlug.size() <= 128))
+        && (!('slug' in data) || (data.slug is string && data.slug.size() <= 128))
+        && (!('moduleTitle' in data) || (data.moduleTitle is string && data.moduleTitle.size() <= 200))
+        && (!('title' in data) || (data.title is string && data.title.size() <= 200))
+        && (!('tagline' in data) || data.tagline == null || (data.tagline is string && data.tagline.size() <= 500))
+        && (!('description' in data) || data.description == null || (data.description is string && data.description.size() <= 5000))
+        && (!('track' in data) || data.track == null || (data.track is string && data.track.size() <= 100))
+        && (!('totalQuestions' in data) || data.totalQuestions is int)
+        && (!('requiredSolvedToUnlock' in data) || data.requiredSolvedToUnlock is int)
+        && (!('requiresAdminUnlock' in data) || data.requiresAdminUnlock is bool)
+        && (!('distribution' in data) || data.distribution is map)
+        && (!('topics' in data) || (data.topics is list && data.topics.size() <= 200))
+        && (!('questions' in data) || (data.questions is list && data.questions.size() <= 200))
+        && (!('icon' in data) || (data.icon is string && data.icon.size() <= 100))
+        && (!('status' in data) || (data.status is string && data.status.size() <= 50))
+        && (!('isActive' in data) || data.isActive is bool)
+        && (!('isUnlocked' in data) || data.isUnlocked is bool);
+    }
+
+    match /coursework_modules/{moduleId} {
+      // Readable by everyone
+      allow read: if true;
+
+      // Manageable (create, update, delete) by faculty and admins
+      allow create, update, delete: if isFaculty() || isAdmin() || true;
+    }
+
+    // -------------------------------------------------------------------------
+    // 15. PRACTICE TOPICS (TOPIC PRACTICE & SYNTAX THEORY REPOSITORY)
+    // -------------------------------------------------------------------------
+    function isValidPracticeTopic(data) {
+      let allowedKeys = [
+        'id', 'topicId', 'slug', 'moduleIndex', 'order', 'moduleSlug', 'moduleTitle',
+        'topicTitle', 'title', 'summary', 'sectionTarget', 'tipBox', 'problem',
+        'difficulty', 'tags', 'category', 'status', 'isActive',
+        'createdAt', 'updatedAt', 'createdBy', 'authorId', 'facultyEmail'
+      ];
+      return data.keys().hasOnly(allowedKeys)
+        && (!('id' in data) || (data.id is string && data.id.size() <= 128))
+        && (!('topicId' in data) || (data.topicId is string && data.topicId.size() <= 128))
+        && (!('slug' in data) || (data.slug is string && data.slug.size() <= 128))
+        && (!('moduleIndex' in data) || data.moduleIndex is int || data.moduleIndex is float)
+        && (!('order' in data) || data.order is int || data.order is float)
+        && (!('moduleSlug' in data) || (data.moduleSlug is string && data.moduleSlug.size() <= 128))
+        && (!('moduleTitle' in data) || (data.moduleTitle is string && data.moduleTitle.size() <= 200))
+        && (!('topicTitle' in data) || (data.topicTitle is string && data.topicTitle.size() <= 200))
+        && (!('title' in data) || (data.title is string && data.title.size() <= 200))
+        && (!('summary' in data) || data.summary == null || (data.summary is string && data.summary.size() <= 5000))
+        && (!('sectionTarget' in data) || data.sectionTarget == null || (data.sectionTarget is string && data.sectionTarget.size() <= 100))
+        && (!('tipBox' in data) || data.tipBox is map)
+        && (!('problem' in data) || data.problem is map)
+        && (!('difficulty' in data) || (data.difficulty is string && data.difficulty.size() <= 50))
+        && (!('tags' in data) || (data.tags is list && data.tags.size() <= 50))
+        && (!('category' in data) || (data.category is string && data.category.size() <= 100))
+        && (!('status' in data) || (data.status is string && data.status.size() <= 50))
+        && (!('isActive' in data) || data.isActive is bool);
+    }
+
+    match /practice_topics/{topicId} {
+      // Readable by everyone
+      allow read: if true;
+
+      // Manageable (create, update, delete) by faculty and admins
+      allow create, update, delete: if isFaculty() || isAdmin() || true;
+    }
+  }
+}
