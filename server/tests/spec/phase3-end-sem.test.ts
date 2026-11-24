@@ -7,6 +7,8 @@ import {
   computeProgramOutcomeAttainment,
   classifyLearners,
   generateBoardOfStudiesGapReport,
+  INSTITUTIONAL_REPORTS,
+  verifyReportNumbersMatchRecords,
   EndSemPaper,
   StudentExamEligibilityCheck,
 } from '../../src/domain/lab-course/phase3-rules.js';
@@ -278,6 +280,55 @@ describe('Phase 3: End-Semester Practical & Attainment Specification Suite', () 
       expect(report.unAttainedCos).toEqual(['CO3']);
       expect(report.gapSummary).toContain('CO3');
       expect(report.suggestedRemediations.length).toBeGreaterThan(0);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Institutional Reports & AC-19 Specification (Page 19)
+  // ---------------------------------------------------------------------------
+  describe('Page 19: Institutional Reports & AC-19 Record Matching Verification', () => {
+    it('Defines all 9 mandatory NAAC/NBA institutional reports with correct signatories', () => {
+      expect(INSTITUTIONAL_REPORTS.course_plan.signedBy).toEqual(['Faculty', 'HOD']);
+      expect(INSTITUTIONAL_REPORTS.attendance_register.signedBy).toEqual(['Faculty']);
+      expect(INSTITUTIONAL_REPORTS.assessment_record.signedBy).toEqual(['Setter', 'Moderator', 'HOD']);
+      expect(INSTITUTIONAL_REPORTS.sample_submissions.signedBy).toEqual(['Faculty']);
+      expect(INSTITUTIONAL_REPORTS.mark_lists.signedBy).toEqual(['Faculty', 'HOD']);
+      expect(INSTITUTIONAL_REPORTS.co_po_attainment.signedBy).toEqual(['Faculty', 'HOD']);
+      expect(INSTITUTIONAL_REPORTS.learner_support.signedBy).toEqual(['Faculty', 'HOD']);
+      expect(INSTITUTIONAL_REPORTS.gap_analysis_action_taken.signedBy).toEqual(['HOD', 'Dean']);
+      expect(INSTITUTIONAL_REPORTS.eligibility_list.signedBy).toEqual(['HOD', 'CoE']);
+    });
+
+    it('AC-19: Verifies every number in a generated report exactly matches source marks and attendance', () => {
+      const sourceRecords = new Map<string, Record<string, number>>([
+        ['s_1', { labAttendancePct: 88, cieScaled20: 16.5, preLabScore: 3, postLabScore: 2.5 }],
+        ['s_2', { labAttendancePct: 92, cieScaled20: 18.0, preLabScore: 3, postLabScore: 3.0 }],
+      ]);
+
+      const correctReport = [
+        { studentId: 's_1', metricName: 'cieScaled20', reportedValue: 16.5 },
+        { studentId: 's_1', metricName: 'labAttendancePct', reportedValue: 88 },
+        { studentId: 's_2', metricName: 'cieScaled20', reportedValue: 18.0 },
+      ];
+
+      const check1 = verifyReportNumbersMatchRecords({
+        reportNumbers: correctReport,
+        sourceRecords,
+      });
+      expect(check1.verified).toBe(true);
+      expect(check1.discrepancies.length).toBe(0);
+
+      // Discrepancy test
+      const tamperedReport = [
+        { studentId: 's_1', metricName: 'cieScaled20', reportedValue: 19.5 }, // Tampered
+      ];
+      const check2 = verifyReportNumbersMatchRecords({
+        reportNumbers: tamperedReport,
+        sourceRecords,
+      });
+      expect(check2.verified).toBe(false);
+      expect(check2.discrepancies[0].reported).toBe(19.5);
+      expect(check2.discrepancies[0].source).toBe(16.5);
     });
   });
 

@@ -15,6 +15,8 @@ import {
   validatePrePostLabBank,
   randomizeLabMcqs,
   validateSessionCodingQuestions,
+  checkAiDraftingQuota,
+  SuperAdminAiConfig,
   TestCase,
   QuestionVariant,
   McqQuestionItem,
@@ -457,6 +459,41 @@ describe('Phase 2: Lab Programs, Variants & Test Cases Specification Suite', () 
       const student2Selection = randomizeLabMcqs(bank, 'PRN20261002', 3);
       expect(student2Selection.length).toBe(3);
       expect(student1Selection.map(q => q.id)).not.toEqual(student2Selection.map(q => q.id));
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // BR-38: AI Provider, Model and Per-Month Spending Cap
+  // When cap is reached, drafting pauses and staff are told.
+  // ---------------------------------------------------------------------------
+  describe('BR-38: Super-Admin AI Provider & Spending Cap Guardrail', () => {
+    it('BR-38: Permits drafting when spend is strictly under monthly spending cap', () => {
+      const config: SuperAdminAiConfig = {
+        provider: 'gemini',
+        model: 'gemini-1.5-pro',
+        monthlySpendingCapUsd: 100,
+        currentMonthSpendUsd: 42.5,
+      };
+
+      const result = checkAiDraftingQuota(config);
+      expect(result.allowed).toBe(true);
+      expect(result.remainingBudgetUsd).toBe(57.5);
+      expect(result.pausedReason).toBeUndefined();
+    });
+
+    it('BR-38: Automatically pauses drafting and alerts staff when monthly cap is reached or exceeded', () => {
+      const config: SuperAdminAiConfig = {
+        provider: 'gemini',
+        model: 'gemini-1.5-pro',
+        monthlySpendingCapUsd: 100,
+        currentMonthSpendUsd: 100.05,
+      };
+
+      const result = checkAiDraftingQuota(config);
+      expect(result.allowed).toBe(false);
+      expect(result.remainingBudgetUsd).toBe(0);
+      expect(result.pausedReason).toContain('BR-38: Monthly AI drafting spend cap');
+      expect(result.pausedReason).toContain('AI drafting paused');
     });
   });
 

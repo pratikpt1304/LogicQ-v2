@@ -369,3 +369,134 @@ export function generateBoardOfStudiesGapReport(params: {
     suggestedRemediations,
   };
 }
+
+// -----------------------------------------------------------------------------
+// INSTITUTIONAL REPORTS REGISTRY & SIGNATORY MATRIX (Spec Page 19)
+// -----------------------------------------------------------------------------
+export type InstitutionalReportType =
+  | 'course_plan'
+  | 'attendance_register'
+  | 'assessment_record'
+  | 'sample_submissions'
+  | 'mark_lists'
+  | 'co_po_attainment'
+  | 'learner_support'
+  | 'gap_analysis_action_taken'
+  | 'eligibility_list';
+
+export interface InstitutionalReportSpec {
+  type: InstitutionalReportType;
+  title: string;
+  contents: string;
+  signedBy: string[]; // e.g. ['Faculty', 'HOD'], ['HOD', 'CoE']
+  requiresApprovalTrail: boolean;
+}
+
+export const INSTITUTIONAL_REPORTS: Record<InstitutionalReportType, InstitutionalReportSpec> = {
+  course_plan: {
+    type: 'course_plan',
+    title: 'Course Plan',
+    contents: 'Syllabus, COs, CO-PO/PSO matrix, session plan with dates',
+    signedBy: ['Faculty', 'HOD'],
+    requiresApprovalTrail: true,
+  },
+  attendance_register: {
+    type: 'attendance_register',
+    title: 'Attendance Register',
+    contents: 'Batch-wise lab attendance, makeup sessions',
+    signedBy: ['Faculty'],
+    requiresApprovalTrail: false,
+  },
+  assessment_record: {
+    type: 'assessment_record',
+    title: 'Assessment Record',
+    contents: 'Papers with blueprint, evaluation scheme, approval trail with dates',
+    signedBy: ['Setter', 'Moderator', 'HOD'],
+    requiresApprovalTrail: true,
+  },
+  sample_submissions: {
+    type: 'sample_submissions',
+    title: 'Sample Submissions',
+    contents: 'Best, average and weakest submission per assessment',
+    signedBy: ['Faculty'],
+    requiresApprovalTrail: false,
+  },
+  mark_lists: {
+    type: 'mark_lists',
+    title: 'Mark Lists',
+    contents: 'Question-wise marks, totals, submission times',
+    signedBy: ['Faculty', 'HOD'],
+    requiresApprovalTrail: true,
+  },
+  co_po_attainment: {
+    type: 'co_po_attainment',
+    title: 'CO and PO Attainment',
+    contents: 'Per CO and assessment, direct and indirect, PO roll-up, bell curves',
+    signedBy: ['Faculty', 'HOD'],
+    requiresApprovalTrail: true,
+  },
+  learner_support: {
+    type: 'learner_support',
+    title: 'Learner Support',
+    contents: 'Slow and advanced learners, actions, outcomes',
+    signedBy: ['Faculty', 'HOD'],
+    requiresApprovalTrail: true,
+  },
+  gap_analysis_action_taken: {
+    type: 'gap_analysis_action_taken',
+    title: 'Gap Analysis and Action Taken',
+    contents: 'Gaps, BoS recommendations, actions in the next offering',
+    signedBy: ['HOD', 'Dean'],
+    requiresApprovalTrail: true,
+  },
+  eligibility_list: {
+    type: 'eligibility_list',
+    title: 'Eligibility List',
+    contents: 'Eligible and not eligible students with reasons, exemptions',
+    signedBy: ['HOD', 'CoE'],
+    requiresApprovalTrail: true,
+  },
+};
+
+// -----------------------------------------------------------------------------
+// AC-19: Every number in a generated report matches the mark and attendance
+// records it came from.
+// -----------------------------------------------------------------------------
+export function verifyReportNumbersMatchRecords(params: {
+  reportNumbers: { studentId: string; metricName: string; reportedValue: number }[];
+  sourceRecords: Map<string, Record<string, number>>; // studentId -> { metricName: rawValue }
+}): {
+  verified: boolean;
+  discrepancies: { studentId: string; metricName: string; reported: number; source: number }[];
+} {
+  const discrepancies: { studentId: string; metricName: string; reported: number; source: number }[] = [];
+
+  for (const item of params.reportNumbers) {
+    const studentData = params.sourceRecords.get(item.studentId);
+    if (!studentData || studentData[item.metricName] === undefined) {
+      discrepancies.push({
+        studentId: item.studentId,
+        metricName: item.metricName,
+        reported: item.reportedValue,
+        source: NaN,
+      });
+      continue;
+    }
+
+    const sourceVal = studentData[item.metricName];
+    // Exact or within 0.01 precision for scaled values
+    if (Math.abs(item.reportedValue - sourceVal) > 0.01) {
+      discrepancies.push({
+        studentId: item.studentId,
+        metricName: item.metricName,
+        reported: item.reportedValue,
+        source: sourceVal,
+      });
+    }
+  }
+
+  return {
+    verified: discrepancies.length === 0,
+    discrepancies,
+  };
+}

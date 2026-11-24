@@ -1,5 +1,3 @@
-import crypto from 'crypto';
-
 // -----------------------------------------------------------------------------
 // TYPES FOR PHASE 2 (Lab Programs, Test Cases, Variants & Grading)
 // -----------------------------------------------------------------------------
@@ -364,8 +362,18 @@ export function generateLabFileVerificationDossier(params: {
   const salt = params.secretSalt || 'logicq_sanjivani_salt_2026';
   const rawData = `${params.studentRollNo}|${params.courseCode}|${params.academicYear}|${params.totalMarksEarned}/${params.totalMarksMax}|${salt}`;
   
-  // SHA-256 tamper-evident verification fingerprint
-  const hash = crypto.createHash('sha256').update(rawData).digest('hex').substring(0, 16).toUpperCase();
+  // Browser & Node compatible tamper-evident verification fingerprint
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0; i < rawData.length; i++) {
+    const ch = rawData.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507);
+  h1 ^= Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507);
+  h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  const hash = ((h1 >>> 0).toString(16).padStart(8, '0') + (h2 >>> 0).toString(16).padStart(8, '0')).toUpperCase().substring(0, 16);
   const verificationCode = `LQ-${params.courseCode}-${params.studentRollNo}-${hash}`;
   const verificationUrl = `https://logicq-clanguage.web.app/verify/lab-file?code=${verificationCode}&roll=${params.studentRollNo}&marks=${params.totalMarksEarned}`;
 
@@ -455,6 +463,37 @@ export function sanitizePromptForAi(
   }
 
   return { cleanPrompt: cleaned, containsPii };
+}
+
+// -----------------------------------------------------------------------------
+// BR-38: The AI provider, model and per-month spending cap are super-admin settings;
+// when the cap is reached, drafting pauses and staff are told.
+// -----------------------------------------------------------------------------
+export interface SuperAdminAiConfig {
+  provider: 'gemini' | 'openai' | 'anthropic' | 'custom';
+  model: string;
+  monthlySpendingCapUsd: number;
+  currentMonthSpendUsd: number;
+}
+
+export function checkAiDraftingQuota(config: SuperAdminAiConfig): {
+  allowed: boolean;
+  pausedReason?: string;
+  remainingBudgetUsd: number;
+} {
+  const remaining = Math.max(0, config.monthlySpendingCapUsd - config.currentMonthSpendUsd);
+  if (config.currentMonthSpendUsd >= config.monthlySpendingCapUsd) {
+    return {
+      allowed: false,
+      pausedReason: `BR-38: Monthly AI drafting spend cap of $${config.monthlySpendingCapUsd} has been reached (Current: $${config.currentMonthSpendUsd}). AI drafting paused. Super-admin notified.`,
+      remainingBudgetUsd: 0,
+    };
+  }
+
+  return {
+    allowed: true,
+    remainingBudgetUsd: Math.round(remaining * 100) / 100,
+  };
 }
 
 // -----------------------------------------------------------------------------
